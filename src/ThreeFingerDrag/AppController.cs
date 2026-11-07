@@ -138,12 +138,12 @@ namespace ThreeFingerDrag {
 
     public bool EnabledValue { get { return enabled; } }
     public bool DragActive {get{return input!=null && input.Enabled && input.Listening;}}
-    public bool NeedsConfiguration {get{return !configurationReady;}}
+    public bool NeedsConfiguration {get{return ConfigurationNeedsAttention(enabled,CanRun,AppPaths.IsIsolated,configurationReady);}}
     public bool DiagnosticValue { get { return diagnostic; } }
     public int UnifiedSpeedValue { get { return unifiedSpeed; } }
     public bool CanUndoSpeed {get{return speedCoordinator.CanUndo;}}
     public int UndoSpeedTarget {get{return speedCoordinator.UndoTarget;}}
-    public string DesktopHotkeyWarning {get{return desktopHotkeysRequested && (!desktopHotkeys.Enabled || !string.IsNullOrEmpty(desktopHotkeys.LastError))?(string.IsNullOrEmpty(desktopHotkeys.LastError)?"桌面快捷键未启用，请到诊断与维护查看。":desktopHotkeys.LastError):null;}}
+    public string DesktopHotkeyWarning {get{return ShortcutWarning(desktopHotkeysRequested,CanRun,AppPaths.IsIsolated,desktopHotkeys.Enabled,desktopHotkeys.LastError);}}
     public string CurrentStatus { get { return currentStatus; } }
     public bool DesktopHotkeysEnabled {get{return desktopHotkeys.Enabled;}}
     public string InputWarning {get{return enabled && CanRun && configurationReady && !DragActive && !AppPaths.IsIsolated?input.LastRegistrationError:null;}}
@@ -151,6 +151,11 @@ namespace ThreeFingerDrag {
     public bool IsPreview {get{return AppPaths.IsIsolated;}}
     public bool RuntimePaused {get{return runtime.Paused || resumeCleanupPending;}}
     bool CanShutdown {get{return drag.CanShutdown && desktopHotkeys.CanShutdown;}}
+    internal static bool ConfigurationNeedsAttention(bool requested,bool canRun,bool preview,bool ready){return requested && canRun && !preview && !ready;}
+    internal static string ShortcutWarning(bool requested,bool canRun,bool preview,bool active,string error) {
+      if(!requested || !canRun || preview || active && string.IsNullOrEmpty(error))return null;
+      return string.IsNullOrEmpty(error)?"桌面快捷键未能启用，请到诊断与维护查看。":error;
+    }
 
     void ShowOnFirstIdle(object sender, EventArgs e) {
       Application.Idle -= ShowOnFirstIdle;
@@ -257,7 +262,7 @@ namespace ThreeFingerDrag {
     public void SetDesktopHotkeys(bool value) {
       desktopHotkeysRequested=value;
       bool success=desktopHotkeys.SetEnabled(value && CanRun);
-      OnCoreStatus(!success?desktopHotkeys.LastError:value?"Ctrl＋左右键切换桌面已启用。":"桌面切换快捷键已关闭，Ctrl＋左右键恢复应用中的原有操作。");
+      OnCoreStatus(!success?desktopHotkeys.LastError:value && !CanRun?"桌面快捷键选择已保留，会话恢复后启用。":value?"Ctrl＋左右键切换桌面已启用。":"桌面切换快捷键已关闭，Ctrl＋左右键恢复应用中的原有操作。");
       if(AppPaths.IsIsolated)OnCoreStatus("预览模式：不会注册全局桌面快捷键。");
       if(form!=null && !form.IsDisposed)form.SyncDesktopHotkeys(desktopHotkeysRequested);
       SaveOptions();
@@ -282,12 +287,12 @@ namespace ThreeFingerDrag {
         lastStatusWrite=DateTime.UtcNow;
         string path=AppPaths.StateFile("gesture-status.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path));
-        File.WriteAllText(path,new JavaScriptSerializer().Serialize(new {updatedAt=DateTime.Now.ToString("o"),enabled=DragActive,requestedEnabled=enabled,requiresSignIn=!configurationReady,readiness=GesturePreferences.LastReadinessDetail,inputError=input==null?null:input.LastRegistrationError,unifiedSpeed=unifiedSpeed,canUndoSpeed=speedCoordinator!=null && speedCoordinator.CanUndo,undoSpeedTarget=speedCoordinator!=null && speedCoordinator.CanUndo?(int?)speedCoordinator.UndoTarget:null,dragGain=drag==null?0:drag.Scale,physicalSpeedCalibration=true,status=text,dragStarts=drag==null?0:drag.DragStarts,dragReleases=drag==null?0:drag.DragReleases,desktopHotkeysEnabled=desktopHotkeys!=null && desktopHotkeys.Enabled,desktopHotkeyError=desktopHotkeys==null?null:desktopHotkeys.LastError,desktopSwitchRequests=desktopHotkeys==null?0:desktopHotkeys.Requests}));
+        File.WriteAllText(path,new JavaScriptSerializer().Serialize(new {updatedAt=DateTime.Now.ToString("o"),enabled=DragActive,requestedEnabled=enabled,requiresSignIn=NeedsConfiguration,readiness=GesturePreferences.LastReadinessDetail,inputError=input==null?null:input.LastRegistrationError,unifiedSpeed=unifiedSpeed,canUndoSpeed=speedCoordinator!=null && speedCoordinator.CanUndo,undoSpeedTarget=speedCoordinator!=null && speedCoordinator.CanUndo?(int?)speedCoordinator.UndoTarget:null,dragGain=drag==null?0:drag.Scale,physicalSpeedCalibration=true,status=text,dragStarts=drag==null?0:drag.DragStarts,dragReleases=drag==null?0:drag.DragReleases,desktopHotkeysEnabled=desktopHotkeys!=null && desktopHotkeys.Enabled,desktopHotkeyError=desktopHotkeys==null?null:desktopHotkeys.LastError,desktopSwitchRequests=desktopHotkeys==null?0:desktopHotkeys.Requests}));
       }catch{}
     }
 
     public void ConfigureGestureMode() {
-      try { GesturePreferences.Apply(true);SetEnabled(true);OnCoreStatus(!string.IsNullOrEmpty(InputWarning)?InputWarning:GesturePreferences.LastRecoveryWarning.Length>0?GesturePreferences.LastRecoveryWarning:GesturePreferences.LastReloadPending?"等待系统应用手势设置。":"已配置三指拖移与四指手势；桌面快捷键保留你的选择。"); }
+      try { GesturePreferences.Apply(true);SetEnabled(true);OnCoreStatus(!string.IsNullOrEmpty(InputWarning)?InputWarning:GesturePreferences.LastRecoveryWarning.Length>0?GesturePreferences.LastRecoveryWarning:GesturePreferences.LastReloadPending?"等待系统应用手势设置。":"已配置三指拖移；四指手势遵循 Windows 设置，桌面快捷键保留你的选择。"); }
       catch(Exception exception){logger.Error(exception.Message);OnCoreStatus("配置失败："+exception.Message);}
     }
 

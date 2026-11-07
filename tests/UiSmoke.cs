@@ -16,8 +16,12 @@ class UiSmoke {
   [DllImport("user32.dll")]static extern bool RedrawWindow(IntPtr window,IntPtr update,IntPtr region,uint flags);
   [DllImport("user32.dll")]static extern IntPtr SendMessage(IntPtr window,int message,IntPtr wParam,IntPtr lParam);
   [DllImport("gdi32.dll")]static extern bool BitBlt(IntPtr target,int x,int y,int width,int height,IntPtr source,int sourceX,int sourceY,uint operation);
+  [DllImport("gdi32.dll")]static extern uint GetPixel(IntPtr dc,int x,int y);
   [StructLayout(LayoutKind.Sequential)]struct NativeRect{public int Left,Top,Right,Bottom;}
   static object Field(object value,string name){return value.GetType().GetField(name,BindingFlags.Instance|BindingFlags.NonPublic).GetValue(value);}
+  static T Named<T>(Control root,string name) where T:Control{foreach(Control control in Walk(root))if(control.Name==name)return (T)control;throw new InvalidOperationException("Missing control "+name);}
+  static void Mouse(Control control,string method,MouseButtons buttons,int x,int y){control.GetType().GetMethod(method,BindingFlags.Instance|BindingFlags.NonPublic).Invoke(control,new object[]{new MouseEventArgs(buttons,1,x,y,0)});}
+  static uint ButtonFill(ActionButton button){button.Update();IntPtr dc=GetDC(button.Handle);try{return GetPixel(dc,button.Width/2,Math.Max(2,button.Height/4));}finally{ReleaseDC(button.Handle,dc);}}
   static void Command(SettingsForm form,Keys key){typeof(SettingsForm).GetMethod("ProcessCmdKey",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(form,new object[]{new Message(),key});}
   // Route only to this process's own control, with the same preprocessing used by WinForms.
   static void OwnKey(Control control,Keys key,bool released){
@@ -108,7 +112,8 @@ class UiSmoke {
             bool lastActionVisible=ReachLastAction(form,page);if(!lastActionVisible)errors.Add("The last action cannot be fully reached inside the scrolling viewport");
             object bottomCapture=size=="minimum"?CaptureClient(form,Path.Combine(screenshots,id+"-bottom.png")):null;
             foreach(string error in errors)problems.Add(id+": "+error);
-            cases.Add(new{id=id,theme=theme,font=font,page=page,size=size,actualDpi=dpi,graphicsDpi=graphicsDpi,clientWidth=form.ClientSize.Width,clientHeight=form.ClientSize.Height,minimumWidth=form.MinimumSize.Width,lastActionVisible=lastActionVisible,issues=errors,capture=capture,bottomCapture=bottomCapture});
+            object layoutDetails=null;if(errors.Count>0 && page==2){var grid=(TableLayoutPanel)Field(form,"logLayout");var heading=(Control)Field(form,"logHeading");layoutDetails=new{row0Height=grid.RowStyles[0].Height,layoutClientSize=grid.ClientSize.ToString(),headingBounds=heading.Bounds.ToString(),logBounds=Named<TextBox>(form,"diagnosticLog").Bounds.ToString()};}
+            cases.Add(new{id=id,theme=theme,font=font,page=page,size=size,actualDpi=dpi,graphicsDpi=graphicsDpi,clientWidth=form.ClientSize.Width,clientHeight=form.ClientSize.Height,minimumWidth=form.MinimumSize.Width,lastActionVisible=lastActionVisible,issues=errors,layoutDetails=layoutDetails,capture=capture,bottomCapture=bottomCapture});
           }
         }
         form.RequestDispose();
@@ -148,6 +153,64 @@ class UiSmoke {
       if(!seen.Add(focused))break;current=focused;
     }
     Check(found,name);
+  }
+  static void InteractionTests(){
+    using(var logger=new Logger{SuppressDisk=true}){
+      for(int index=0;index<150;index++)logger.Info("isolated diagnostic fixture line "+index.ToString("D3"));
+      using(var form=new SettingsForm(null,logger)){
+        form.Show();Application.DoEvents();
+        var home=Button(form,"速度与手势");var diagnostics=Button(form,"诊断与维护");var appearance=Button(form,"外观与体验");
+        home.Focus();OwnKey(home,Keys.Down,false);OwnKey(home,Keys.Down,true);
+        var log=Named<TextBox>(form,"diagnosticLog");Check(log.Visible && diagnostics.Selected && diagnostics.Focused,"Sidebar Down opens the next page and transfers focus to its navigation item");
+        OwnKey(diagnostics,Keys.End,false);OwnKey(appearance,Keys.End,true);Check(appearance.Selected && Named<ChoiceButton>(form,"themeChoice").Visible,"Sidebar End reaches the final page");
+        OwnKey(appearance,Keys.Down,false);OwnKey(appearance,Keys.Down,true);Check(appearance.Selected,"Sidebar navigation clamps at the last page");
+        OwnKey(appearance,Keys.Home,false);OwnKey(home,Keys.Home,true);OwnKey(home,Keys.Up,false);OwnKey(home,Keys.Up,true);Check(home.Selected,"Sidebar Home reaches the first page and Up stays within its boundary");
+        Command(form,Keys.Control|Keys.D2);log.Focus();OwnKey(log,Keys.Home,false);OwnKey(log,Keys.Home,true);Check(diagnostics.Selected && log.Visible,"Editing navigation keys inside logs do not switch sidebar pages");
+
+        int copied=0;string copiedText=null;form.CopyDiagnosticText=delegate(string text){copied++;copiedText=text;};
+        var copy=Named<ActionButton>(form,"copyDiagnostics");var feedback=Named<Label>(form,"diagnosticFeedback");
+        copy.Focus();copy.GetType().GetMethod("OnMouseLeave",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(copy,new object[]{EventArgs.Empty});uint resting=ButtonFill(copy);
+        OwnKey(copy,Keys.Space,false);uint pressed=ButtonFill(copy);OwnKey(copy,Keys.Space,true);uint released=ButtonFill(copy);
+        Check(pressed!=resting && released==resting && copied==1,"A held Space visibly presses an action and releases with exactly one activation");
+        Check(copiedText!=null && copiedText.Contains("fixture line 149") && feedback.Visible && feedback.Text.Contains("复制"),"Copy diagnostics uses the injected writer and confirms success beside the log");
+        form.CopyDiagnosticText=delegate{throw new IOException("simulated clipboard unavailable");};copy.PerformClick();
+        Check(feedback.Text.Contains("复制") && (feedback.Text.Contains("无法") || feedback.Text.Contains("失败") || feedback.Text.Contains("未能")),"A failed copy exposes feedback beside the action without a global clipboard write");
+        Mouse(copy,"OnMouseDown",MouseButtons.Left,copy.Width/2,copy.Height/2);Mouse(copy,"OnMouseMove",MouseButtons.Left,-5,-5);uint outside=ButtonFill(copy);
+        Mouse(copy,"OnMouseUp",MouseButtons.Left,-5,-5);Check(outside==ButtonFill(copy),"Dragging outside an action cancels its pressed appearance");
+        Mouse(copy,"OnMouseDown",MouseButtons.Left,copy.Width/2,copy.Height/2);copy.Enabled=false;copy.Enabled=true;
+        copy.GetType().GetMethod("OnMouseLeave",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(copy,new object[]{EventArgs.Empty});Check(ButtonFill(copy)==resting,"Disabling and restoring an action does not leave it visually pressed");
+
+        home.PerformClick();bool startup=false;form.ReadAutostart=delegate{return startup;};form.ChangeAutostart=delegate{throw new IOException("simulated startup write failure");};
+        Toggle startupToggle=null;foreach(Control control in Walk(form))if(control is Toggle && control.AccessibleName=="登录后自动运行")startupToggle=(Toggle)control;
+        if(startupToggle==null)throw new InvalidOperationException("Missing startup toggle");startupToggle.Checked=true;
+        Check(!startupToggle.Checked && !startup,"A failed startup write restores the control from the unchanged model");
+
+        Command(form,Keys.Control|Keys.D3);var theme=Named<ChoiceButton>(form,"themeChoice");theme.AccessibilityObject.DoDefaultAction();Application.DoEvents();
+        var menu=(ContextMenuStrip)Field(theme,"choices");Check(menu.Width>=theme.Width && menu.Items[0].Font.FontFamily.Name==theme.Font.FontFamily.Name && Math.Abs(menu.Items[0].Font.SizeInPoints-theme.Font.SizeInPoints)<.1f,"Choice menus align with the trigger width and typography");
+        menu.GetType().GetMethod("ProcessCmdKey",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(menu,new object[]{new Message(),Keys.F4});
+        Check(!menu.Visible && (theme.AccessibilityObject.State&AccessibleStates.Collapsed)!=0,"F4 closes the focused choice popup through its own keyboard route");
+        form.RequestDispose();
+      }
+      LogReadingTests(logger);
+    }
+  }
+  static void LogReadingTests(Logger logger){
+    using(var form=new SettingsForm(null,logger)){
+      form.Show();Command(form,Keys.Control|Keys.D2);Application.DoEvents();
+      var log=Named<TextBox>(form,"diagnosticLog");var follow=Named<ActionButton>(form,"followDiagnostics");var feedback=Named<Label>(form,"diagnosticFeedback");
+      // Scroll only this fixture's edit control; this is an ordinary user-reading message.
+      SendMessage(log.Handle,0x115,new IntPtr(6),IntPtr.Zero);Application.DoEvents();
+      log.Select(Math.Min(18,log.TextLength),8);string frozen=log.Text;int selection=log.SelectionStart,length=log.SelectionLength;
+      int first=SendMessage(log.Handle,0xCE,IntPtr.Zero,IntPtr.Zero).ToInt32();logger.Info("isolated record appended while reading");Application.DoEvents();
+      Check(log.Text==frozen && log.SelectionStart==selection && log.SelectionLength==length && SendMessage(log.Handle,0xCE,IntPtr.Zero,IntPtr.Zero).ToInt32()==first,"Reading older diagnostics freezes the text and preserves selection and scroll position");
+      Check(follow.Text.Contains("回到最新") && feedback.Text.Contains("新记录"),"Paused diagnostics indicate that new records are waiting");
+      Button(form,"速度与手势").PerformClick();logger.Info("isolated record appended on another page");Button(form,"诊断与维护").PerformClick();Application.DoEvents();
+      Check(log.Text==frozen && log.SelectionStart==selection && log.SelectionLength==length,"Returning to diagnostics preserves the paused reading view");
+      Command(form,Keys.Control|Keys.D1);Command(form,Keys.Control|Keys.D2);Application.DoEvents();
+      Check(log.SelectionStart==selection && log.SelectionLength==length && SendMessage(log.Handle,0xCE,IntPtr.Zero,IntPtr.Zero).ToInt32()==first,"Keyboard page navigation preserves the paused log selection and reading position");
+      follow.PerformClick();Application.DoEvents();Check(log.Text.Contains("record appended on another page") && follow.Text.Contains("暂停跟随"),"Returning to latest includes records received while the reading view was paused");
+      form.RequestDispose();
+    }
   }
   [STAThread]static void Main(string[] args){try{
     if(args.Length<2 || !AppPaths.IsIsolated)throw new InvalidOperationException("UI checks require an independent data directory");
@@ -205,6 +268,7 @@ class UiSmoke {
       form.RequestDispose();
     }
     Check(!File.Exists(Path.Combine(args[0],"state","pointer-speed-before.json")),"Preview never invokes the system-speed backup or setter");Check(Hash(config)==beforeHash,"Preview interactions never change saved user preferences");
+    InteractionTests();
     AppearanceStorageTests(args[0]);
     File.WriteAllText(Path.Combine(args[1],"ui-smoke.json"),new JavaScriptSerializer().Serialize(new{success=true,capturedAt=DateTime.Now.ToString("o"),checks=checks,previewSpeed=before,isolatedPreview=true,globalInputInjected=false}));
   }catch(Exception error){File.WriteAllText(Path.Combine(args[1],"ui-smoke.error.txt"),error.ToString());Environment.Exit(1);}}

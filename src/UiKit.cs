@@ -81,21 +81,35 @@ namespace OpenTrackpadUi {
     }
   }
   class ActionButton:Button {
-    bool hover;public string NavigationIcon="";public bool Primary{get;set;}public bool Navigation{get;set;}public bool Selected{get;set;}
+    bool hover,mousePressed,keyPressed;public string NavigationIcon="";public bool Primary{get;set;}public bool Navigation{get;set;}public bool Selected{get;set;}
     public ActionButton(){FlatStyle=FlatStyle.Flat;FlatAppearance.BorderSize=0;Cursor=Cursors.Hand;Font=Palette.Font(9.5f,FontStyle.Regular);Height=38;SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer,true);}
     protected override void OnMouseEnter(EventArgs e){hover=true;Invalidate();base.OnMouseEnter(e);}protected override void OnMouseLeave(EventArgs e){hover=false;Invalidate();base.OnMouseLeave(e);}
+    protected override void OnMouseDown(MouseEventArgs e){if(Enabled && e.Button==MouseButtons.Left){mousePressed=true;hover=ClientRectangle.Contains(e.Location);Invalidate();}base.OnMouseDown(e);}
+    protected override void OnMouseMove(MouseEventArgs e){if(mousePressed){bool inside=ClientRectangle.Contains(e.Location);if(hover!=inside){hover=inside;Invalidate();}}base.OnMouseMove(e);}
+    protected override void OnMouseUp(MouseEventArgs e){if(e.Button==MouseButtons.Left){mousePressed=false;Invalidate();}base.OnMouseUp(e);}
+    protected override void OnMouseCaptureChanged(EventArgs e){if(!Capture){mousePressed=false;Invalidate();}base.OnMouseCaptureChanged(e);}
+    protected override void OnKeyDown(KeyEventArgs e){if(Enabled && e.Modifiers==Keys.None && e.KeyCode==Keys.Space){keyPressed=true;Invalidate();}base.OnKeyDown(e);}
+    protected override void OnKeyUp(KeyEventArgs e){if(e.KeyCode==Keys.Space){keyPressed=false;Invalidate();}base.OnKeyUp(e);}
+    void ResetPress(){mousePressed=keyPressed=false;Invalidate();}
     protected override void OnGotFocus(EventArgs e){base.OnGotFocus(e);Invalidate();}
-    protected override void OnLostFocus(EventArgs e){base.OnLostFocus(e);Invalidate();}
+    protected override void OnLostFocus(EventArgs e){ResetPress();base.OnLostFocus(e);}
+    protected override void OnEnabledChanged(EventArgs e){if(!Enabled){hover=false;ResetPress();}base.OnEnabledChanged(e);Invalidate();}
+    protected override void OnVisibleChanged(EventArgs e){if(!Visible){hover=false;ResetPress();}base.OnVisibleChanged(e);}
+    protected override void OnChangeUICues(UICuesEventArgs e){base.OnChangeUICues(e);if(e.ChangeFocus)Invalidate();}
+    protected override bool IsInputKey(Keys key){Keys code=key&Keys.KeyCode;if(Navigation && (key&Keys.Modifiers)==Keys.None && (code==Keys.Up || code==Keys.Down || code==Keys.Home || code==Keys.End))return true;return base.IsInputKey(key);}
     protected override void OnPaint(PaintEventArgs e){
       e.Graphics.Clear(Parent is Card?Palette.Surface:Parent==null?Palette.Canvas:Parent.BackColor);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;float s=e.Graphics.DpiX/96;
+      bool pressed=Enabled && (keyPressed || mousePressed && hover);
       Color fill=Navigation?(Selected?Palette.NavSelected:hover?Palette.Hover:Palette.Nav):Primary?(hover?ControlPaint.Light(Palette.Accent,.08f):Palette.Accent):hover?Palette.Hover:Palette.Surface;
       Color ink=Navigation?(Selected?(SystemInformation.HighContrast?Palette.PrimaryInk:Palette.Ink):Palette.NavMuted):Primary?Palette.PrimaryInk:Palette.Ink;
-      if(SystemInformation.HighContrast && Enabled && (Primary || Selected && Navigation || hover)){fill=SystemColors.Highlight;ink=SystemColors.HighlightText;}
+      if(pressed && !SystemInformation.HighContrast)fill=Primary?(UiPreferences.Dark?Color.FromArgb(91,198,173):Color.FromArgb(16,105,88)):(UiPreferences.Dark?Color.FromArgb(60,69,83):Color.FromArgb(224,231,238));
+      if(SystemInformation.HighContrast && Enabled && (Primary || Selected && Navigation || hover || pressed)){fill=SystemColors.Highlight;ink=SystemColors.HighlightText;}
       if(!Enabled){fill=SystemInformation.HighContrast?Palette.Surface:Palette.Hover;ink=Palette.DisabledInk;}
       using(var path=Palette.Round(new RectangleF(1,1,Width-2,Height-2),8*s))using(var brush=new SolidBrush(fill)){e.Graphics.FillPath(brush,path);if(!Navigation && !Primary)using(var pen=new Pen(Palette.GentleEdge,s))e.Graphics.DrawPath(pen,path);}
-      if(Navigation){Glyphs.Draw(e.Graphics,new RectangleF(17*s,(Height-20*s)/2,20*s,20*s),NavigationIcon,!Enabled?ink:Selected && !SystemInformation.HighContrast?Palette.Accent:ink);Rectangle text=new Rectangle((int)(48*s),0,Math.Max(1,Width-(int)(55*s)),Height);TextRenderer.DrawText(e.Graphics,Text,Font,text,ink,TextFormatFlags.Left|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);}
-      else TextRenderer.DrawText(e.Graphics,Text,Font,ClientRectangle,ink,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);
-      if(Focused && ShowFocusCues)ControlPaint.DrawFocusRectangle(e.Graphics,Rectangle.Inflate(ClientRectangle,-5,-5),ink,fill);
+      int offset=pressed?(int)Math.Round(s):0;
+      if(Navigation){Glyphs.Draw(e.Graphics,new RectangleF(17*s,(Height-20*s)/2+offset,20*s,20*s),NavigationIcon,!Enabled?ink:Selected && !SystemInformation.HighContrast?Palette.Accent:ink);Rectangle text=new Rectangle((int)(48*s),offset,Math.Max(1,Width-(int)(55*s)),Height);TextRenderer.DrawText(e.Graphics,Text,Font,text,ink,TextFormatFlags.Left|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);}
+      else {Rectangle text=ClientRectangle;text.Offset(0,offset);TextRenderer.DrawText(e.Graphics,Text,Font,text,ink,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);}
+      if(Enabled && Focused && ShowFocusCues){Color ring=Primary || SystemInformation.HighContrast?ink:Palette.Accent;using(var path=Palette.Round(new RectangleF(3.5f*s,3.5f*s,Width-7*s,Height-7*s),5.5f*s))using(var pen=new Pen(ring,1.5f*s))e.Graphics.DrawPath(pen,path);}
     }
   }
   sealed class ChoiceButton:ActionButton {
@@ -109,9 +123,10 @@ namespace OpenTrackpadUi {
     void ShowChoices(){
       if(!Enabled || IsDisposed || disposing || options.Length==0)return;
       if(choices!=null){if(choices.Visible){choices.Close(ToolStripDropDownCloseReason.Keyboard);return;}choices.Dispose();choices=null;}
-      var menu=new ContextMenuStrip();choices=menu;Palette.StyleMenu(menu);
+      var menu=new ChoiceMenu();choices=menu;Palette.StyleMenu(menu);menu.MinimumSize=new Size(Width,0);
+      menu.Opening+=delegate{menu.Font=Font;foreach(ToolStripItem item in menu.Items)if(!(item.Tag is FontChoice))item.Font=Font;};
       for(int index=0;index<options.Length;index++){int choice=index;var item=new ToolStripMenuItem(options[index]);item.Checked=index==selected;
-        if(FontChoices!=null && index<FontChoices.Count){item.Tag=FontChoices[index];item.Font=Palette.FontFor(FontChoices[index].Family,9.5f,FontStyle.Regular);}
+        if(FontChoices!=null && index<FontChoices.Count){item.Tag=FontChoices[index];item.Font=Palette.FontFor(FontChoices[index].Family,Font.SizeInPoints,FontStyle.Regular);}
         item.Click+=delegate{SelectedIndex=choice;};menu.Items.Add(item);
       }
       // Dispose after the close stack has returned, on the next open or with the owner.
@@ -128,6 +143,9 @@ namespace OpenTrackpadUi {
     protected override void OnEnabledChanged(EventArgs e){base.OnEnabledChanged(e);if(!Enabled && choices!=null)choices.Close();Invalidate();}
     protected override void Dispose(bool disposing){this.disposing=disposing;if(disposing && choices!=null){var menu=choices;choices=null;menu.Dispose();}base.Dispose(disposing);}
     protected override AccessibleObject CreateAccessibilityInstance(){return new ChoiceAccessibility(this);}
+    sealed class ChoiceMenu:ContextMenuStrip {
+      protected override bool ProcessCmdKey(ref Message message,Keys key){if(key==Keys.F4 || key==(Keys.Alt|Keys.Down) || key==(Keys.Alt|Keys.Up)){Close(ToolStripDropDownCloseReason.Keyboard);return true;}return base.ProcessCmdKey(ref message,key);}
+    }
     sealed class ChoiceAccessibility:ControlAccessibleObject {
       readonly ChoiceButton owner;
       public ChoiceAccessibility(ChoiceButton owner):base(owner){this.owner=owner;}

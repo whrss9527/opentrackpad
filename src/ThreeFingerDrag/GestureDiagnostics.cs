@@ -232,11 +232,11 @@ namespace ThreeFingerDrag {
       Check(!GesturePreferences.CanActivateAfterSignIn(true,"","",configured,boot),"Unknown logon does not bypass pending configuration");
       Check(GesturePreferences.CanActivateAfterSignIn(true,"same","same",configured,configured.AddMinutes(1)),"New boot activates persisted gestures");
       Check(GesturePreferences.CanActivateAfterSignIn(false,"same","same",configured,boot),"Verified live preferences activate immediately");
-      Check(GesturePreferences.LivePreferencesReady(new GesturePreferences.CacheValues {threeTap=0,threeSlide=0,fourSlide=1}),"Live Settings changes unblock dragging in the same logon");
-      Check(!GesturePreferences.LivePreferencesReady(new GesturePreferences.CacheValues {threeTap=1,threeSlide=0,fourSlide=1}),"Native three-finger tap conflict keeps dragging paused");
-      Check(!GesturePreferences.LivePreferencesReady(new GesturePreferences.CacheValues {threeTap=0,threeSlide=1,fourSlide=1}),"Native three-finger swipe conflict keeps dragging paused");
-      Check(!GesturePreferences.LivePreferencesReady(new GesturePreferences.CacheValues {threeTap=0,threeSlide=0,fourSlide=2}),"Four-finger app switching requires the requested native action");
-      Check(!GesturePreferences.LivePreferencesReady(null),"Unavailable live preferences do not bypass the configuration gate");
+      Check(GesturePreferences.DragPreferencesReady(new GesturePreferences.CacheValues {threeTap=0,threeSlide=0,fourSlide=1}),"Live three-finger Settings changes unblock dragging in the same logon");
+      Check(!GesturePreferences.DragPreferencesReady(new GesturePreferences.CacheValues {threeTap=1,threeSlide=0,fourSlide=1}),"Native three-finger tap conflict keeps dragging paused");
+      Check(!GesturePreferences.DragPreferencesReady(new GesturePreferences.CacheValues {threeTap=0,threeSlide=1,fourSlide=1}),"Native three-finger swipe conflict keeps dragging paused");
+      Check(GesturePreferences.DragPreferencesReady(new GesturePreferences.CacheValues {threeTap=0,threeSlide=0,fourSlide=2}),"Four-finger desktop switching remains available while three-finger dragging is configured");
+      Check(!GesturePreferences.DragPreferencesReady(null),"Unavailable live preferences do not bypass the configuration gate");
     }
 
     static void ShortcutTests() {

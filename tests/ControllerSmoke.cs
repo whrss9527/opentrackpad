@@ -116,6 +116,14 @@ static class ControllerSmoke {
         Check(AtomicJson.WithLock<bool>(concurrent,delegate{return File.ReadAllText(concurrent)==File.ReadAllText(AtomicJson.RecoveryPath(concurrent));}),"Two real writer processes leave the main and recovery files consistent");
         Check(Convert.ToInt32(((Dictionary<string,object>)AtomicJson.Read(concurrent,null).Value)["iteration"])==19,"Concurrent writers retain a complete final JSON payload");
         Check(!input.Listening && !controller.DesktopHotkeysEnabled,"No controller integration action enables real input or global shortcuts");
+        bool priorReady=(bool)Field(controller,"configurationReady");controller.SetEnabled(false);
+        typeof(AppController).GetField("configurationReady",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(controller,false);
+        Check(!controller.NeedsConfiguration,"An intentionally disabled controller does not request gesture configuration");
+        var runtime=(RuntimeGate)Field(controller,"runtime");runtime.Apply(RuntimeEvent.Lock);controller.SetEnabled(true);controller.SetDesktopHotkeys(true);
+        Check(controller.RuntimePaused && !controller.NeedsConfiguration && string.IsNullOrEmpty(controller.DesktopHotkeyWarning),"A locked session retains requested features without misleading configuration or shortcut warnings");
+        runtime.Apply(RuntimeEvent.Unlock);runtime.Snapshot(true,false,true);
+        Check(controller.IsPreview && !controller.NeedsConfiguration && string.IsNullOrEmpty(controller.DesktopHotkeyWarning),"An active isolated profile never reports a real input-registration or shortcut conflict");
+        typeof(AppController).GetField("configurationReady",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(controller,priorReady);
         controller.SetEnabled(true);controller.SetDesktopHotkeys(true);string beforeFailure=Hash(AppPaths.StateFile("gesture-options.json"));
         controller.PauseAfterFailure(new InvalidOperationException("simulated UI failure"));
         Check(!controller.EnabledValue && !controller.DesktopHotkeysRequested && !controller.DragActive && Hash(AppPaths.StateFile("gesture-options.json"))==beforeFailure,"An unexpected-error pause disables current input without overwriting saved user preferences");

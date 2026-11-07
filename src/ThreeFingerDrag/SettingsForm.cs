@@ -12,7 +12,7 @@ namespace ThreeFingerDrag {
     readonly Panel content=new Panel(),overview=new Panel(),advanced=new Panel(),appearance=new Panel();
     readonly Label stateLabel=Palette.Label("",9,Palette.Accent),speedValue=Palette.Label("",28,Palette.Ink),detail=Palette.Label("",9,Palette.Muted),backgroundState=Palette.Label("",8,Color.FromArgb(155,177,199));
     readonly Toggle enabledBox=new Toggle(),desktopKeysBox=new Toggle(),startupBox=new Toggle(),diagnosticBox=new Toggle();
-    readonly SpeedSlider speed=new SpeedSlider();readonly ActionButton home=new ActionButton(),diagnostics=new ActionButton(),appearanceNav=new ActionButton();readonly TextBox logBox=new TextBox();
+    readonly SpeedSlider speed=new SpeedSlider();readonly ActionButton home=new ActionButton(),diagnostics=new ActionButton(),appearanceNav=new ActionButton();readonly DiagnosticLogBox logBox=new DiagnosticLogBox();
     readonly ChoiceButton themeChoice=new ChoiceButton(),fontChoice=new ChoiceButton();
     readonly Label appearanceStatus=Palette.Label("",9,Palette.Muted);
     readonly ActionButton saveAppearance=new ActionButton(),cancelAppearance=new ActionButton();
@@ -22,9 +22,13 @@ namespace ThreeFingerDrag {
     FlowLayoutPanel maintenanceActions;
     Panel logHeading;
     Label logTitle,logHint,runtimeBadge;
-    ActionButton copyLogButton,openLogButton;
+    ActionButton copyLogButton,openLogButton,followLogButton;
+    bool followingLog=true,pendingLog,contextualFeedback,lastStartupValue;
+    internal Action<string> CopyDiagnosticText=Clipboard.SetText;
+    internal Action<bool> ChangeAutostart;
+    internal Func<bool> ReadAutostart;
     readonly Dictionary<Panel,int> pageHeights=new Dictionary<Panel,int>();
-    bool reflowing;
+    bool reflowing,reflowQueued;
     Card speedArea;ActionButton restoreButton,hideButton,undoButton;FlowLayoutPanel presetRow;float layoutScale;bool arranging;
     readonly Label speedCaption=Palette.Label("",8,Palette.Muted);
     readonly Timer draftTimer=new Timer(),feedbackTimer=new Timer();readonly SpeedDraft speedDraft;
@@ -34,7 +38,10 @@ namespace ThreeFingerDrag {
     bool syncing,allowDispose;
     public SettingsForm(AppController controller,Logger logger):this(controller,logger,null){}
     internal SettingsForm(AppController controller,Logger logger,Action<int> applySpeed){
-      this.controller=controller;this.logger=logger;speedDraft=new SpeedDraft(delegate(int value){if(applySpeed!=null)applySpeed(value);else if(controller!=null)controller.SetUnifiedSpeed(value);});Text="Open Trackpad · 触摸板设置";Font=Palette.Font(9.5f,FontStyle.Regular);BackColor=Palette.Canvas;
+      this.controller=controller;this.logger=logger;
+      ChangeAutostart=controller==null?null:new Action<bool>(controller.SetAutostart);
+      ReadAutostart=delegate{return controller!=null && GesturePreferences.HasAutostart();};
+      speedDraft=new SpeedDraft(delegate(int value){if(applySpeed!=null)applySpeed(value);else if(controller!=null)controller.SetUnifiedSpeed(value);});Text="Open Trackpad · 触摸板设置";Font=Palette.Font(9.5f,FontStyle.Regular);BackColor=Palette.Canvas;
       SuspendLayout();AutoScaleMode=AutoScaleMode.None;ClientSize=new Size(1000,760);MinimumSize=new Size(880,540);StartPosition=FormStartPosition.CenterScreen;DoubleBuffered=true;
       try{Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);}catch{}
       var root=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=Padding.Empty,Padding=Padding.Empty};root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,202));root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));root.RowStyles.Add(new RowStyle(SizeType.Percent,100));Controls.Add(root);
@@ -44,12 +51,14 @@ namespace ThreeFingerDrag {
       home.AccessibleName="速度与手势";home.TabIndex=0;home.Text="速度与手势";home.Navigation=true;home.NavigationIcon="speed";home.Selected=true;home.SetBounds(16,138,170,44);home.Click+=delegate{ShowPage(false);};sidebar.Controls.Add(home);
       diagnostics.AccessibleName="诊断与维护";diagnostics.TabIndex=1;diagnostics.Text="诊断与维护";diagnostics.Navigation=true;diagnostics.NavigationIcon="maintenance";diagnostics.SetBounds(16,190,170,44);diagnostics.Click+=delegate{ShowPage(true);};sidebar.Controls.Add(diagnostics);
       appearanceNav.AccessibleName="外观与体验";appearanceNav.TabIndex=2;appearanceNav.Text="外观与体验";appearanceNav.Navigation=true;appearanceNav.NavigationIcon="appearance";appearanceNav.SetBounds(16,242,170,44);appearanceNav.Click+=delegate{ShowAppearance();};sidebar.Controls.Add(appearanceNav);sidebar.Tag="nav";
+      foreach(ActionButton navigation in new[]{home,diagnostics,appearanceNav})navigation.KeyDown+=NavigateSidebar;
       var sideFoot=new Panel{Dock=DockStyle.Bottom,Height=94,BackColor=Palette.Nav};sidebar.Controls.Add(sideFoot);backgroundState.SetBounds(26,6,162,25);sideFoot.Controls.Add(backgroundState);
       Label foot=Palette.Label("版本 "+Application.ProductVersion,7.5f,Palette.NavMuted);foot.SetBounds(26,38,166,24);sideFoot.Controls.Add(foot);
       content.Dock=DockStyle.Fill;content.Padding=new Padding(30,24,30,20);content.Margin=Padding.Empty;root.Controls.Add(content,1,0);overview.Dock=advanced.Dock=appearance.Dock=DockStyle.Fill;content.Controls.Add(appearance);content.Controls.Add(advanced);content.Controls.Add(overview);
       sidebar.TabIndex=0;content.TabIndex=1;overview.TabIndex=0;advanced.TabIndex=1;appearance.TabIndex=2;
       BuildOverview();BuildAdvanced();BuildAppearance();ShowPage(false);if(logger!=null){logBox.Text=logger.Snapshot()+Environment.NewLine;logger.LineAdded+=AppendLog;}else logBox.Text="界面预览 · 未启动触点监听或快捷键。\r\n实际运行时，诊断日志将在此显示。";
-      tips.SetToolTip(home,"速度与手势（Ctrl+1）");tips.SetToolTip(diagnostics,"诊断与维护（Ctrl+2）");tips.SetToolTip(speed,"拖动时预览，松手后应用。Esc可取消未应用的改动。");tips.SetToolTip(undoButton,"回到最近一次调速之前的档位。");tips.SetToolTip(restoreButton,"恢复最初备份的速度；恢复后仍可撤销。");
+      logBox.UserReading+=delegate{PauseLogFollowing();};
+      tips.SetToolTip(home,"速度与手势（Ctrl+1；上下方向键切页）");tips.SetToolTip(diagnostics,"诊断与维护（Ctrl+2；上下方向键切页）");tips.SetToolTip(appearanceNav,"外观与体验（Ctrl+3；Ctrl+S 保存）");tips.SetToolTip(speed,"拖动时预览，松手后应用。Esc可取消未应用的改动。");tips.SetToolTip(undoButton,"回到最近一次调速之前的档位。");tips.SetToolTip(restoreButton,"恢复最初备份的速度；恢复后仍可撤销。");
       UpdateStatus(controller==null?"预览":controller.CurrentStatus);FormClosing+=OnFormClosing;FormClosed+=delegate{if(logger!=null)logger.LineAdded-=AppendLog;draftTimer.Dispose();feedbackTimer.Dispose();tips.Dispose();UiPreferences.Preview(committedAppearance);};
       draftTimer.Interval=40;draftTimer.Tick+=delegate{speedDraft.Tick(DateTime.UtcNow,speed.IsInteracting);if(!speedDraft.Pending){draftTimer.Stop();UpdateSpeedNumber();}};
       feedbackTimer.Interval=750;feedbackTimer.Tick+=delegate{if(Visible)RefreshFooter();};Shown+=delegate{FitToWorkArea();feedbackTimer.Start();};
@@ -57,7 +66,7 @@ namespace ThreeFingerDrag {
       using(Graphics graphics=CreateGraphics()){float factor=graphics.DpiX/96f;if(Math.Abs(factor-1)>0.01)Scale(new SizeF(factor,factor));layoutScale=factor;}
       Rectangle available=Screen.FromControl(this).WorkingArea;MinimumSize=new Size(Math.Min(MinimumSize.Width,available.Width-24),Math.Min(MinimumSize.Height,available.Height-24));Size=new Size(Math.Min(Width,available.Width-24),Math.Min(Height,available.Height-24));
       ConfigureScrolling(overview,714);ConfigureScrolling(advanced,650);ConfigureScrolling(appearance,650);
-      ApplyAppearance();AlignSpeedArea();Resize+=delegate{AlignSpeedArea();ReflowRows();};
+      ApplyAppearance();AlignSpeedArea();Resize+=delegate{QueueReflow();};
     }
     TableLayoutPanel Page(Panel host,string title,string subtitle){
       var page=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));page.RowStyles.Add(new RowStyle(SizeType.Absolute,90));page.RowStyles.Add(new RowStyle(SizeType.Percent,100));host.Controls.Add(page);
@@ -83,7 +92,7 @@ namespace ThreeFingerDrag {
       Card drag=SettingRow("三指拖移","轻移三根手指，拖动窗口、文件或选中文字。",enabledBox);enabledBox.AccessibleName="启用三指拖移";enabledBox.Checked=controller==null || controller.EnabledValue;enabledBox.CheckedChanged+=delegate{if(!syncing && controller!=null)controller.SetEnabled(enabledBox.Checked);};rows.Controls.Add(drag,0,1);
       Card four=SettingRow("四指手势","使用 Windows 中设置的手势。",null);Label keys=Palette.Label("←   →",16,Palette.Accent);keys.TextAlign=ContentAlignment.MiddleRight;keys.SetBounds(575,16,126,38);keys.Anchor=AnchorStyles.Top|AnchorStyles.Right;four.Controls.Add(keys);var systemGestures=Button("Windows 设置",120,delegate{Process.Start(new ProcessStartInfo("ms-settings:devices-touchpad"){UseShellExecute=true});});systemGestures.Name="windowsGestureSettings";systemGestures.SetBounds(585,20,120,36);systemGestures.Anchor=AnchorStyles.Top|AnchorStyles.Right;four.Controls.Add(systemGestures);keys.Visible=false;rows.Controls.Add(four,0,2);
       Card desk=SettingRow("Ctrl + ← / → 切换桌面","启用后，会替代文本编辑中的按词移动快捷键。",desktopKeysBox);desktopKeysBox.AccessibleName="Ctrl左右键切换虚拟桌面";desktopKeysBox.Checked=controller!=null && controller.DesktopHotkeysRequested;desktopKeysBox.CheckedChanged+=delegate{if(!syncing && controller!=null)controller.SetDesktopHotkeys(desktopKeysBox.Checked);};rows.Controls.Add(desk,0,3);
-      Card startup=SettingRow("登录后自动运行","关闭窗口后，仍在托盘保持运行。",startupBox);startupBox.AccessibleName="登录后自动运行";startupBox.Checked=controller!=null && GesturePreferences.HasAutostart();startupBox.CheckedChanged+=delegate{if(!syncing && controller!=null)controller.SetAutostart(startupBox.Checked);};rows.Controls.Add(startup,0,4);
+      Card startup=SettingRow("登录后自动运行","关闭窗口后，仍在托盘保持运行。",startupBox);startupBox.AccessibleName="登录后自动运行";startupBox.Name="startupChoice";startupBox.Checked=lastStartupValue=ReadAutostart();startupBox.CheckedChanged+=delegate{ChangeStartupChoice();};rows.Controls.Add(startup,0,4);
       Panel footer=new Panel{Dock=DockStyle.Fill,Margin=Padding.Empty,Size=new Size(738,55)};rows.Controls.Add(footer,0,5);stateLabel.SetBounds(0,2,570,28);stateLabel.AutoEllipsis=true;footer.Controls.Add(stateLabel);ActionButton hide=Button("收起到托盘",120,delegate{if(NeedsAttention){ShowPage(true);return;}FlushSpeed();if(controller!=null)controller.HideSettings();else Close();});hideButton=hide;hide.SetBounds(610,0,120,34);hide.Anchor=AnchorStyles.Top|AnchorStyles.Left;footer.Controls.Add(hide);
     }
     void AddPreset(FlowLayoutPanel row,string text,int value){var button=Button(text,112,delegate{speed.Value=value;FlushSpeed();});button.Height=32;button.Tag=value;button.Primary=speed.Value==value;presetButtons.Add(button);row.Controls.Add(button);}
@@ -111,9 +120,11 @@ namespace ThreeFingerDrag {
       logLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));logLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,62));logLayout.RowStyles.Add(new RowStyle(SizeType.Percent,100));logCard.Controls.Add(logLayout);
       logHeading=new Panel{Dock=DockStyle.Fill,Margin=Padding.Empty,Tag="surface",BackColor=Palette.Surface};logLayout.Controls.Add(logHeading,0,0);
       logTitle=Palette.Label("运行记录",11,Palette.Ink);logTitle.Font=Palette.Font(11,FontStyle.Bold);logTitle.SetBounds(0,0,180,28);logHeading.Controls.Add(logTitle);
-      logHint=Palette.Label("记录仅保存在本机。",8.5f,Palette.Muted);logHint.SetBounds(0,29,200,24);logHeading.Controls.Add(logHint);
-      copyLogButton=Button("复制诊断",100,delegate{Clipboard.SetText(controller==null?logBox.Text:controller.CopyableLog());ShowFeedback("诊断信息已复制。",false);});copyLogButton.Name="copyDiagnostics";copyLogButton.AccessibleName="复制诊断信息";copyLogButton.SetBounds(430,6,100,34);logHeading.Controls.Add(copyLogButton);
+      logHint=Palette.Label("记录仅保存在本机。",8.5f,Palette.Muted);logHint.Name="diagnosticFeedback";logHint.SetBounds(0,29,200,24);logHeading.Controls.Add(logHint);
+      copyLogButton=Button("复制诊断",100,CopyDiagnostics);copyLogButton.Name="copyDiagnostics";copyLogButton.AccessibleName="复制诊断信息";copyLogButton.SetBounds(430,6,100,34);logHeading.Controls.Add(copyLogButton);
       openLogButton=Button("打开日志",100,delegate{if(controller!=null)controller.OpenLogs();});openLogButton.Name="openLogs";openLogButton.SetBounds(540,6,100,34);openLogButton.Enabled=controller!=null;logHeading.Controls.Add(openLogButton);
+      followLogButton=Button("暂停跟随",100,delegate{if(followingLog)PauseLogFollowing();else ResumeLogFollowing();});followLogButton.Name="followDiagnostics";followLogButton.SetBounds(320,6,100,34);logHeading.Controls.Add(followLogButton);
+      tips.SetToolTip(followLogButton,"查看历史或选中文本时自动暂停界面更新；后台继续记录，回到最新后恢复。");tips.SetToolTip(copyLogButton,"复制完整诊断；选中片段可用 Ctrl+C。");
       logBox.Name="diagnosticLog";logBox.AccessibleName="本机运行记录";logBox.Dock=DockStyle.Fill;logBox.Multiline=true;logBox.ReadOnly=true;logBox.BorderStyle=BorderStyle.None;logBox.ScrollBars=ScrollBars.Vertical;logBox.HideSelection=false;logBox.Font=Palette.Font(9.5f,FontStyle.Regular);logBox.BackColor=Palette.LogSurface;logBox.ForeColor=Palette.LogInk;logBox.Margin=Padding.Empty;logLayout.Controls.Add(logBox,0,1);
 
       Card verbose=SettingRow("详细日志","仅在排查问题时开启，日常使用无需打开。",diagnosticBox);rows.Controls.Add(verbose,0,2);
@@ -124,10 +135,10 @@ namespace ThreeFingerDrag {
       maintenanceActions.Controls.Add(Button("恢复原生手势",125,delegate{if(controller!=null){controller.RestoreNativeGestures();syncing=true;startupBox.Checked=GesturePreferences.HasAutostart();syncing=false;}}));
       maintenanceActions.Controls.Add(Button("驱动与硬件",115,delegate{if(controller!=null)Process.Start(new ProcessStartInfo(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"OpenTrackpad.DriverPanel.exe")){UseShellExecute=false,Arguments=AppPaths.IsIsolated?"--preview":String.Empty});}));
       maintenanceActions.Controls.Add(Button("退出后台",100,delegate{if(controller!=null)controller.ExitApplication();else Close();}));
-      logHeading.Resize+=delegate{ReflowRows();};
+      logHeading.Resize+=delegate{QueueReflow();};
     }
-    static ActionButton Button(string text,int width,Action action){var button=new ActionButton{Text=text,Width=width,Margin=new Padding(0,0,10,0)};button.Click+=delegate{try{action();}catch(Exception error){SettingsForm window=button.FindForm() as SettingsForm;if(window!=null)window.ShowFeedback("操作未完成："+error.Message,true);}};return button;}
-    void ShowPage(bool maintenance){appearance.Visible=false;appearanceNav.Selected=false;appearanceNav.Invalidate();if(maintenance && speedDraft.Pending){speed.CancelInteraction();FlushSpeed();}overview.Visible=!maintenance;advanced.Visible=maintenance;home.Selected=!maintenance;diagnostics.Selected=maintenance;home.Invalidate();diagnostics.Invalidate();if(maintenance && logger!=null)logBox.Text=logger.Snapshot()+Environment.NewLine;ReflowRows();}
+    static ActionButton Button(string text,int width,Action action){var button=new ActionButton{Text=text,Width=width,Margin=new Padding(0,0,10,0)};button.Click+=delegate{try{action();}catch(Exception error){SettingsForm window=button.FindForm() as SettingsForm;if(window!=null)window.ReportOperationFailure(error);}};return button;}
+    void ShowPage(bool maintenance){appearance.Visible=false;appearanceNav.Selected=false;appearanceNav.Invalidate();if(maintenance && speedDraft.Pending){speed.CancelInteraction();FlushSpeed();}overview.Visible=!maintenance;advanced.Visible=maintenance;home.Selected=!maintenance;diagnostics.Selected=maintenance;home.Invalidate();diagnostics.Invalidate();if(maintenance && logger!=null && followingLog)RefreshLogSnapshot();ReflowRows();}
     public void ShowDiagnostics(){ShowPage(true);}void UpdateSpeedNumber(){speedValue.Text=speed.Value+" / 20";string profile=speed.Value==6?"精细":speed.Value==10?"均衡":speed.Value==17?"快速":"自定义";speedCaption.Text=speedDraft.Pending?"松手后应用":profile;foreach(var button in presetButtons){button.Primary=(int)button.Tag==speed.Value;button.Invalidate();}if(undoButton!=null)undoButton.Enabled=controller!=null && controller.CanUndoSpeed;}
     void AlignSpeedArea(){
       if(layoutScale<=0 || speedArea==null || arranging)return;arranging=true;
@@ -156,12 +167,40 @@ namespace ThreeFingerDrag {
     }
     public void SyncEnabled(bool value){syncing=true;enabledBox.Checked=value;syncing=false;UpdateStatus(controller==null?"":controller.CurrentStatus);}public void SyncDesktopHotkeys(bool value){syncing=true;desktopKeysBox.Checked=value;syncing=false;}public void SyncSpeed(int value){if(speedDraft.Pending && speed.IsInteracting)return;syncing=true;speed.Value=PointerSpeedPolicy.Clamp(value);UpdateSpeedNumber();syncing=false;}
     void FlushSpeed(){draftTimer.Stop();speedDraft.Flush();UpdateSpeedNumber();}
-    bool NeedsAttention{get{return (controller!=null && (controller.NeedsConfiguration || !string.IsNullOrEmpty(controller.InputWarning) || !string.IsNullOrEmpty(controller.DesktopHotkeyWarning))) || (feedbackError && DateTime.UtcNow<feedbackUntil);}}
-    public void ShowFeedback(string text,bool error){feedback=text;feedbackError=error;feedbackUntil=DateTime.UtcNow.AddSeconds(error?10:4);RefreshFooter();}
+    bool NeedsAttention{get{return (controller!=null && (controller.NeedsConfiguration || !string.IsNullOrEmpty(controller.InputWarning) || !string.IsNullOrEmpty(controller.DesktopHotkeyWarning))) || (feedbackError && !contextualFeedback && DateTime.UtcNow<feedbackUntil);}}
+    public void ShowFeedback(string text,bool error){contextualFeedback=false;SetFeedback(text,error);}
+    void ShowOperationFeedback(string text,bool error){contextualFeedback=true;SetFeedback(text,error);if(appearance.Visible){appearanceStatus.Text=text;appearanceStatus.ForeColor=error?FeedbackWarning:Palette.Accent;}}
+    Color FeedbackWarning{get{return SystemInformation.HighContrast?SystemColors.WindowText:UiPreferences.Dark?Color.FromArgb(236,194,120):Color.FromArgb(143,91,18);}}
+    void SetFeedback(string text,bool error){feedback=text;feedbackError=error;feedbackUntil=DateTime.UtcNow.AddSeconds(error?10:4);RefreshFooter();}
+    void ReportOperationFailure(Exception error){if(logger!=null)logger.Error(error.ToString());ShowOperationFeedback("操作暂时未能完成，请稍后重试。",true);}
+    void CopyDiagnostics(){try{CopyDiagnosticText(controller==null?logBox.Text:controller.CopyableLog());ShowOperationFeedback("诊断信息已复制。",false);}catch(Exception error){if(logger!=null)logger.Error(error.ToString());ShowOperationFeedback("暂时无法复制，请稍后重试。",true);}}
+    void ChangeStartupChoice(){
+      if(syncing || ChangeAutostart==null)return;
+      try{ChangeAutostart(startupBox.Checked);}catch(Exception error){if(logger!=null)logger.Error(error.ToString());ShowOperationFeedback("登录启动未能更改，请稍后重试。",true);}
+      finally{syncing=true;try{lastStartupValue=ReadAutostart();}catch(Exception error){if(logger!=null)logger.Error(error.ToString());ShowOperationFeedback("暂时无法确认登录启动状态，请稍后重试。",true);}startupBox.Checked=lastStartupValue;syncing=false;}
+    }
+    void NavigateSidebar(object sender,KeyEventArgs args){
+      if(args.Modifiers!=Keys.None)return;ActionButton[] pages={home,diagnostics,appearanceNav};int index=Array.IndexOf(pages,sender as ActionButton),next=index;
+      if(args.KeyCode==Keys.Up)next=Math.Max(0,index-1);else if(args.KeyCode==Keys.Down)next=Math.Min(2,index+1);else if(args.KeyCode==Keys.Home)next=0;else if(args.KeyCode==Keys.End)next=2;else return;
+      if(next==2)ShowAppearance();else ShowPage(next==1);pages[next].Focus();args.Handled=true;args.SuppressKeyPress=true;
+    }
+    void PauseLogFollowing(){if(!followingLog)return;followingLog=false;pendingLog=false;followLogButton.Text="回到最新";RefreshLogHint();}
+    void ResumeLogFollowing(){followingLog=true;pendingLog=false;followLogButton.Text="暂停跟随";RefreshLogSnapshot();RefreshLogHint();}
+    void RefreshLogSnapshot(){
+      logBox.IgnoreReadingGestures=true;
+      try{if(logger!=null)logBox.Text=VisibleLogText(logger.Snapshot()+Environment.NewLine);logBox.SelectionStart=logBox.TextLength;logBox.SelectionLength=0;logBox.ScrollToCaret();}
+      finally{logBox.IgnoreReadingGestures=false;}
+    }
+    static string VisibleLogText(string value){if(value.Length<=65536)return value;int start=value.Length-49152,end=value.IndexOf('\n',start);return value.Substring(end>=0?end+1:start);}
+    void RefreshLogHint(){
+      if(logHint==null)return;bool notice=contextualFeedback && DateTime.UtcNow<feedbackUntil;
+      string text=notice?feedback:followingLog?"记录仅保存在本机。":pendingLog?"已暂停 · 有新记录，点“回到最新”查看。":"已暂停更新，可查看和选择历史记录。";
+      if(logHint.Text!=text)logHint.Text=text;logHint.ForeColor=notice?(feedbackError?FeedbackWarning:Palette.Accent):Palette.Muted;
+    }
     public void UpdateStatus(string text){if(IsDisposed)return;if(InvokeRequired){BeginInvoke(new Action<string>(UpdateStatus),text);return;}latestStatus=text;if(text!=lastStatusForFeedback){lastStatusForFeedback=text;bool error=text.Contains("失败") || text.Contains("未能") || text.Contains("未完成") || text.Contains("需要相同权限");if(error || text.StartsWith("统一速度：") || text.StartsWith("已恢复") || text.StartsWith("已撤销") || text.StartsWith("Ctrl＋")){ShowFeedback(text,error);return;}}RefreshFooter();}
-    void RefreshFooter(){if(IsDisposed || hideButton==null)return;bool active=controller!=null && controller.DragActive;string warning=controller==null?null:controller.InputWarning??controller.DesktopHotkeyWarning;bool notice=DateTime.UtcNow<feedbackUntil;string concise=controller==null || controller.IsPreview?"●  安全预览 · 不会更改触摸板设置":controller.RuntimePaused?"●  已暂停 · 解锁后自动恢复":!string.IsNullOrEmpty(warning)?warning:notice?feedback:active?"●  三指拖移已启用 · 设置即时生效":controller!=null && controller.NeedsConfiguration?"●  手势配置待生效 · 查看详情":"●  三指拖移已暂停";if(stateLabel.Text!=concise)stateLabel.Text=concise;stateLabel.ForeColor=NeedsAttention?(UiPreferences.Dark?Color.FromArgb(236,194,120):Color.FromArgb(143,91,18)):Palette.Accent;string message=notice?feedback:latestStatus;if(detail.Text!=message)detail.Text=message;hideButton.Text=NeedsAttention?"查看详情":"收起到托盘";string background=controller==null || controller.IsPreview?"●  界面预览":active?"●  后台正在运行":"●  后台运行中 · 手势暂停";if(backgroundState.Text!=background)backgroundState.Text=background;if(undoButton!=null)undoButton.Enabled=controller!=null && controller.CanUndoSpeed;
+    void RefreshFooter(){if(IsDisposed || hideButton==null)return;bool active=controller!=null && controller.DragActive;string warning=controller==null?null:controller.InputWarning??controller.DesktopHotkeyWarning;bool notice=DateTime.UtcNow<feedbackUntil;string concise=controller==null || controller.IsPreview?"●  安全预览 · 不会更改触摸板设置":controller.RuntimePaused?"●  已暂停 · 解锁后自动恢复":!string.IsNullOrEmpty(warning)?warning:notice?feedback:active?"●  三指拖移已启用 · 设置即时生效":controller!=null && controller.NeedsConfiguration?"●  手势配置待生效 · 查看详情":"●  三指拖移已暂停";if(stateLabel.Text!=concise)stateLabel.Text=concise;stateLabel.ForeColor=NeedsAttention || notice && feedbackError?FeedbackWarning:Palette.Accent;string message=notice && !contextualFeedback?feedback:latestStatus;if(detail.Text!=message)detail.Text=message;hideButton.Text=NeedsAttention?"查看详情":"收起到托盘";string background=controller==null || controller.IsPreview?"●  界面预览":active?"●  后台正在运行":"●  后台运行中 · 手势暂停";if(backgroundState.Text!=background)backgroundState.Text=background;if(undoButton!=null)undoButton.Enabled=controller!=null && controller.CanUndoSpeed;
       if(runtimeBadge!=null){runtimeBadge.Text=controller==null || controller.IsPreview?"独立预览":controller.RuntimePaused?"已暂停":NeedsAttention?"需要处理":active?"手势运行中":controller.EnabledValue?"等待输入":"手势已关闭";runtimeBadge.ForeColor=NeedsAttention?stateLabel.ForeColor:Palette.Accent;
-        if(!notice){detail.Text=controller==null || controller.IsPreview?"当前为独立预览，所有操作仅作用于预览资料，不接管真实触摸板。":!string.IsNullOrEmpty(warning)?warning:active?"触摸板监听正常；关闭窗口后会在托盘继续运行。":message;}}
+        if(!notice || contextualFeedback){detail.Text=controller==null || controller.IsPreview?"当前为独立预览，所有操作仅作用于预览资料，不接管真实触摸板。":!string.IsNullOrEmpty(warning)?warning:active?"触摸板监听正常；关闭窗口后会在托盘继续运行。":message;}}RefreshLogHint();
     }
     void ConfigureScrolling(Panel host,int height){host.AutoScroll=true;pageHeights[host]=height;host.Controls[0].Dock=DockStyle.Top;SetPageHeight(host,height);host.SizeChanged+=delegate{int value;if(pageHeights.TryGetValue(host,out value))SetPageHeight(host,value);};}
     void SetPageHeight(Panel host,int logicalHeight){if(!pageHeights.ContainsKey(host) || layoutScale<=0)return;pageHeights[host]=logicalHeight;int minimum=(int)(logicalHeight*layoutScale);if(host.AutoScrollMinSize.Height!=minimum)host.AutoScrollMinSize=new Size(0,minimum);int height=Math.Max(minimum,host.ClientSize.Height);if(host.Controls[0].Height!=height)host.Controls[0].Height=height;}
@@ -190,17 +229,23 @@ namespace ThreeFingerDrag {
     }
     void ApplyAppearance(){if(applyingAppearance || IsDisposed || Disposing)return;applyingAppearance=true;SuspendLayout();try{Palette.Apply(this);FitBrandName();speedValue.Font=Palette.Font(28,FontStyle.Regular);appliedHighContrast=SystemInformation.HighContrast;RefreshFooter();ReflowRows();}finally{ResumeLayout(true);applyingAppearance=false;}FitToWorkArea();Invalidate(true);}
     void FitToWorkArea(){if(layoutScale<=0 || WindowState!=FormWindowState.Normal)return;Rectangle area=Screen.FromControl(this).WorkingArea;int width=Math.Min(Width,Math.Max(320,area.Width-24)),height=Math.Min(Height,Math.Max(240,area.Height-24));MinimumSize=new Size(Math.Min(MinimumSize.Width,width),Math.Min(MinimumSize.Height,height));int x=Math.Max(area.Left+8,Math.Min(Left,area.Right-width-8)),y=Math.Max(area.Top+8,Math.Min(Top,area.Bottom-height-8));Bounds=new Rectangle(x,y,width,height);}
+    void QueueReflow(){
+      if(reflowQueued || !IsHandleCreated || IsDisposed || Disposing)return;reflowQueued=true;
+      try{BeginInvoke(new Action(delegate{reflowQueued=false;if(!IsDisposed && !Disposing){ReflowRows();logLayout.PerformLayout();}}));}catch(InvalidOperationException){reflowQueued=false;}
+    }
     void ReflowRows(){
       if(layoutScale<=0 || reflowing)return;reflowing=true;
       try{
         AlignSpeedArea();ReflowPanel(content);appearanceStatus.Width=Math.Max(1,appearanceStatus.Parent.ClientSize.Width-appearanceStatus.Left);
         if(logHeading!=null){
-          int width=logHeading.ClientSize.Width,gap=(int)(10*layoutScale);bool compact=width<430*layoutScale;
-          logLayout.RowStyles[0].Height=(compact?100:62)*layoutScale;
-          copyLogButton.Top=openLogButton.Top=(int)((compact?56:6)*layoutScale);
-          openLogButton.Left=compact?copyLogButton.Width+gap:Math.Max(0,width-openLogButton.Width);
-          copyLogButton.Left=compact?0:Math.Max(0,openLogButton.Left-gap-copyLogButton.Width);
-          logTitle.Width=logHint.Width=Math.Max(1,compact?width:copyLogButton.Left-gap);
+          int width=logHeading.ClientSize.Width,gap=(int)(10*layoutScale);bool compact=width<550*layoutScale;
+          float headingHeight=(compact?100:62)*layoutScale;
+          if(Math.Abs(logLayout.RowStyles[0].Height-headingHeight)>.1f){logLayout.RowStyles[0].Height=headingHeight;QueueReflow();}
+          copyLogButton.Top=openLogButton.Top=followLogButton.Top=(int)((compact?56:6)*layoutScale);
+          openLogButton.Left=compact?followLogButton.Width+copyLogButton.Width+2*gap:Math.Max(0,width-openLogButton.Width);
+          copyLogButton.Left=compact?followLogButton.Width+gap:Math.Max(0,openLogButton.Left-gap-copyLogButton.Width);
+          followLogButton.Left=compact?0:Math.Max(0,copyLogButton.Left-gap-followLogButton.Width);
+          logTitle.Width=logHint.Width=Math.Max(1,compact?width:followLogButton.Left-gap);
         }
         if(maintenanceActions!=null){
           int width=maintenanceActions.ClientSize.Width,used=0,rowHeight=0,total=0;
@@ -238,7 +283,7 @@ namespace ThreeFingerDrag {
     protected override void WndProc(ref Message message){base.WndProc(ref message);if((message.Msg==0x1a || message.Msg==0x31a) && IsHandleCreated && !IsDisposed && !Disposing){bool previous=UiPreferences.Dark;UiPreferences.RefreshSystemTheme();if(message.Msg==0x31a || previous!=UiPreferences.Dark || appliedHighContrast!=SystemInformation.HighContrast)ApplyAppearance();}}
     protected override bool ProcessCmdKey(ref Message message,Keys key){
       if(key==(Keys.Control|Keys.D1)){ShowPage(false);speed.Focus();return true;}
-      if(key==(Keys.Control|Keys.D2)){ShowPage(true);logBox.Focus();logBox.SelectionStart=logBox.TextLength;logBox.SelectionLength=0;return true;}
+      if(key==(Keys.Control|Keys.D2)){ShowPage(true);logBox.Focus();if(followingLog){logBox.SelectionStart=logBox.TextLength;logBox.SelectionLength=0;}return true;}
       if(key==(Keys.Control|Keys.D3)){ShowAppearance();themeChoice.Focus();return true;}
       if(key==(Keys.Control|Keys.S) && appearance.Visible){if(AppearanceDirty)SaveAppearance();return true;}
       if(key==Keys.Escape){
@@ -250,7 +295,14 @@ namespace ThreeFingerDrag {
       }
       return base.ProcessCmdKey(ref message,key);
     }
-    void AppendLog(string line){if(IsDisposed || !advanced.Visible)return;if(InvokeRequired){BeginInvoke(new Action<string>(AppendLog),line);return;}logBox.AppendText(line+Environment.NewLine);if(logBox.TextLength>65536)logBox.Text=logBox.Text.Substring(logBox.TextLength-49152);}
+    void AppendLog(string line){
+      if(IsDisposed || Disposing)return;
+      if(InvokeRequired){try{BeginInvoke(new Action<string>(AppendLog),line);}catch(InvalidOperationException){}return;}
+      if(!followingLog){pendingLog=true;RefreshLogHint();return;}if(!advanced.Visible)return;
+      logBox.IgnoreReadingGestures=true;
+      try{logBox.AppendText(line+Environment.NewLine);if(logBox.TextLength>65536)logBox.Text=VisibleLogText(logBox.Text);logBox.SelectionStart=logBox.TextLength;logBox.SelectionLength=0;logBox.ScrollToCaret();}
+      finally{logBox.IgnoreReadingGestures=false;}
+    }
     void OnFormClosing(object sender,FormClosingEventArgs e){FlushSpeed();UiPreferences.Preview(committedAppearance);if(!allowDispose && e.CloseReason==CloseReason.UserClosing && controller!=null){e.Cancel=true;BeginInvoke(new Action(controller.HideSettings));}}
     public void RequestDispose(){if(IsDisposed)return;allowDispose=true;Close();}
   }

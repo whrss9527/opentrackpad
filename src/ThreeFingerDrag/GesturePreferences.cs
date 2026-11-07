@@ -13,7 +13,6 @@ namespace ThreeFingerDrag {
     const string KeyPath = @"Software\Microsoft\Windows\CurrentVersion\PrecisionTouchPad";
     const string RunPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     const string RunName = "OpenTrackpadThreeFingerDrag";
-    const int FourFingerAction=1; // Switch apps and show desktop; left/right cycles apps.
     static readonly string[] Names = {"ThreeFingerSlideEnabled","ThreeFingerTapEnabled","FourFingerSlideEnabled","FourFingerTapEnabled","TapAndDrag"};
     static readonly int[] CacheIds = {15,17,18};
     static string StatePath {get{return AppPaths.StateDirectory;}}
@@ -74,16 +73,16 @@ namespace ThreeFingerDrag {
           originalEffective=beforeEffective;
           AtomicJson.Write(effectivePath,beforeEffective);
         }
-        string[] changedNames=enabled?new[]{"ThreeFingerSlideEnabled","ThreeFingerTapEnabled","FourFingerSlideEnabled"}:Names;
+        var requestedValues=ValuesToApply(enabled,originalValues);
+        IEnumerable<string> changedNames=requestedValues.Keys;
         StartupEntry previousStartup=enabled?null:CaptureStartup();
         object result=GestureTransaction.Run(delegate {
-          if(enabled)WriteValues(new Dictionary<string,int?>{{"ThreeFingerSlideEnabled",0},{"ThreeFingerTapEnabled",0},{"FourFingerSlideEnabled",FourFingerAction}},changedNames);
-          else WriteValues(originalValues,changedNames);
+          WriteValues(requestedValues,changedNames);
           SetTapAndDrag(enabled?false:originalTap.Value);
           cache.Reload();
           CacheValues effective=cache.Read();
           if(enabled) {
-            for(int attempt=0;attempt<20 && !LivePreferencesReady(effective);attempt++) {
+            for(int attempt=0;attempt<20 && !DragPreferencesReady(effective);attempt++) {
               System.Threading.Thread.Sleep(50);effective=cache.Read();
             }
           }
@@ -92,12 +91,12 @@ namespace ThreeFingerDrag {
           if(((verified.userFlags&8)!=0)!=expectedTap)throw new InvalidOperationException("轻点拖移设置尚未生效。");
           var applied=DecodeOriginalValues(new Dictionary<string,object>{{"values",CaptureValues()}});
           foreach(string name in changedNames) {
-            int? expected=enabled?(name=="FourFingerSlideEnabled"?FourFingerAction:0):originalValues[name];
+            int? expected=requestedValues[name];
             if(applied[name]!=expected)throw new InvalidOperationException("Windows 尚未保存完整手势设置。");
           }
-          LastReloadPending=enabled?!LivePreferencesReady(effective):effective.threeTap!=originalEffective.threeTap || effective.threeSlide!=originalEffective.threeSlide || effective.fourSlide!=originalEffective.fourSlide;
+          LastReloadPending=enabled?!DragPreferencesReady(effective):effective.threeTap!=originalEffective.threeTap || effective.threeSlide!=originalEffective.threeSlide || effective.fourSlide!=originalEffective.fourSlide;
           if(!enabled)SetAutostartCore(false);
-          object recorded=new {success=true,capturedAt=DateTime.Now.ToString("o"),configuredLogon=Native.LogonSessionId(),mode=enabled?"three-finger-drag / four-finger-app-switch":"original-windows-gestures",values=CaptureValues(),cache=effective,requiresShellReload=LastReloadPending,tapAndDragEnabled=(verified.userFlags&8)!=0,autostartEnabled=HasAutostart(),backup=backupPath,restorationWarning=LastRecoveryWarning};
+          object recorded=new {success=true,capturedAt=DateTime.Now.ToString("o"),configuredLogon=Native.LogonSessionId(),mode=enabled?"three-finger-drag / windows-four-finger-gestures":"original-windows-gestures",values=CaptureValues(),cache=effective,requiresShellReload=LastReloadPending,tapAndDragEnabled=(verified.userFlags&8)!=0,autostartEnabled=HasAutostart(),backup=backupPath,restorationWarning=LastRecoveryWarning};
           AtomicJson.Write(Path.Combine(StatePath,"gesture-configuration.json"),recorded);
           return recorded;
         },delegate {
@@ -125,13 +124,20 @@ namespace ThreeFingerDrag {
       // Read immediately before changing our one owned bit; preserve current speed,
       // haptics, sensitivity and unrelated flags, including changes from Windows.
       TouchpadParameters parameters=GetParameters();
-      if(enabled)parameters.userFlags|=8;else parameters.userFlags&=~8u;
+      parameters.userFlags=TapAndDragFlags(parameters.userFlags,enabled);
       if(!SystemParametersInfo(0xAF,(uint)Marshal.SizeOf(typeof(TouchpadParameters)),ref parameters,3))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),"无法应用轻点拖移设置。");
     }
+    internal static uint TapAndDragFlags(uint current,bool enabled){return enabled?current|8u:current&~8u;}
     static void WriteValues(Dictionary<string,int?> values,IEnumerable<string> names) {
       using(RegistryKey key=Registry.CurrentUser.CreateSubKey(KeyPath))foreach(string name in names) {
         int? value=values[name];if(value.HasValue)key.SetValue(name,value.Value,RegistryValueKind.DWord);else key.DeleteValue(name,false);
       }
+    }
+    internal static Dictionary<string,int?> ValuesToApply(bool enabled,Dictionary<string,int?> original) {
+      if(enabled)return new Dictionary<string,int?>{{"ThreeFingerSlideEnabled",0},{"ThreeFingerTapEnabled",0}};
+      if(original==null || original.Count!=Names.Length)throw new InvalidDataException("Original gesture snapshot is incomplete");
+      foreach(string name in Names)if(!original.ContainsKey(name))throw new InvalidDataException("Original gesture snapshot is incomplete");
+      return new Dictionary<string,int?>(original);
     }
     internal static bool? OriginalTapAndDrag(Dictionary<string,object> snapshot,Dictionary<string,int?> values) {
       object explicitValue;
@@ -191,11 +197,6 @@ namespace ThreeFingerDrag {
       // chosen Windows four-finger action (desktops, apps, volume or none).
       return values!=null && values.threeTap==0 && values.threeSlide==0;
     }
-    internal static bool LivePreferencesReady(CacheValues values) {
-      // An explicit Apply still verifies every action that operation requested.
-      return DragPreferencesReady(values) && values.fourSlide==FourFingerAction;
-    }
-
     internal static bool CanActivateAfterSignIn(bool pending,string original,string current,DateTime configuredUtc,DateTime bootUtc) {
       return !pending || (original.Length>0 && current.Length>0 && original!=current) || configuredUtc<bootUtc;
     }

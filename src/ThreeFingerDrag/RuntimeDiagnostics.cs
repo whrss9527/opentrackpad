@@ -45,7 +45,7 @@ namespace ThreeFingerDrag {
       originalEntries.RemoveAt(originalEntries.Count-1);originalEntries.RemoveAt(0);rejected=false;
       try{GesturePreferences.DecodeOriginalValues(originalSnapshot);}catch(InvalidDataException){rejected=true;}
       check(rejected,"Incomplete original gesture snapshots rejected before any system write");
-      SnapshotChecks(check);CliChecks(check);FailureChecks(check);DragReadinessChecks(check);
+      SnapshotChecks(check);CliChecks(check);FailureChecks(check);DragReadinessChecks(check);GestureChoiceChecks(check);IntentWarningChecks(check);
       string parent=Path.GetDirectoryName(Path.GetFullPath(output));Directory.CreateDirectory(parent);
       string fixture=Path.GetFullPath(Path.Combine(parent,"runtime-fixture-"+Guid.NewGuid().ToString("N")));
       Directory.CreateDirectory(fixture);
@@ -83,6 +83,51 @@ namespace ThreeFingerDrag {
       return new Dictionary<string,object>{{"values",entries}};
     }
     static bool Invalid(Action action) {try{action();return false;}catch(InvalidDataException){return true;}}
+    static void GestureChoiceChecks(Action<bool,string> check) {
+      var original=GesturePreferences.DecodeOriginalValues(OriginalSnapshot());
+      var current=new Dictionary<string,int?>(original);current["FourFingerSlideEnabled"]=2;current["FourFingerTapEnabled"]=3;current["TapAndDrag"]=null;
+      var plan=GesturePreferences.ValuesToApply(true,original);
+      check(plan.Count==2 && plan.ContainsKey("ThreeFingerSlideEnabled") && plan.ContainsKey("ThreeFingerTapEnabled"),"Enabling dragging writes only the two conflicting three-finger registry actions");
+      var applied=new Dictionary<string,int?>(current);foreach(var entry in plan)applied[entry.Key]=entry.Value;
+      check(applied["FourFingerSlideEnabled"]==2 && applied["FourFingerTapEnabled"]==3,"Applying the drag configuration preserves both current four-finger choices");
+      check(applied["ThreeFingerSlideEnabled"]==0 && applied["ThreeFingerTapEnabled"]==0,"The drag configuration still disables both conflicting three-finger native actions");
+      foreach(int nativeAction in new[]{0,1,2}) {
+        var chosen=new Dictionary<string,int?>(current);chosen["FourFingerSlideEnabled"]=nativeAction;
+        foreach(var entry in plan)chosen[entry.Key]=entry.Value;
+        check(chosen["FourFingerSlideEnabled"]==nativeAction && GesturePreferences.DragPreferencesReady(new GesturePreferences.CacheValues{threeTap=0,threeSlide=0,fourSlide=(uint)nativeAction}),"Enabling dragging preserves and accepts the chosen native four-finger action: "+nativeAction);
+      }
+      check(original["FourFingerSlideEnabled"]==1 && current["FourFingerSlideEnabled"]==2,"Planning drag setup does not overwrite the full original snapshot or current values");
+      var differentLive=new GesturePreferences.CacheValues{threeTap=0,threeSlide=0,fourSlide=3};
+      check(GesturePreferences.DragPreferencesReady(differentLive) && differentLive.fourSlide==3 && applied["FourFingerSlideEnabled"]==2,"Separate registry and live-cache four-finger choices are preserved without normalizing either layer");
+      foreach(uint flags in new[]{0u,8u,0xA5A55A5Au,uint.MaxValue}) {
+        uint disabled=GesturePreferences.TapAndDragFlags(flags,false),enabled=GesturePreferences.TapAndDragFlags(flags,true);
+        check((disabled&~8u)==(flags&~8u) && (disabled&8u)==0 && (enabled&~8u)==(flags&~8u) && (enabled&8u)!=0,"The native tap-and-drag update preserves every unrelated user flag: "+flags.ToString("X8"));
+      }
+      var restore=GesturePreferences.ValuesToApply(false,original);
+      check(restore.Count==5 && restore["FourFingerSlideEnabled"]==1 && restore["FourFingerTapEnabled"]==1 && restore["TapAndDrag"]==1,"Explicit restoration retains the full original five-value semantics");
+      restore["FourFingerSlideEnabled"]=3;check(original["FourFingerSlideEnabled"]==1,"A restore plan cannot mutate its retained original snapshot");
+      var incomplete=new Dictionary<string,int?>(original);incomplete.Remove("FourFingerTapEnabled");
+      check(Invalid(delegate{GesturePreferences.ValuesToApply(false,incomplete);}),"Explicit restoration still rejects incomplete four-finger original evidence");
+      var simulated=new Dictionary<string,int?>(current);bool failed=false;
+      try{GestureTransaction.Run<int>(delegate{foreach(var entry in plan)simulated[entry.Key]=entry.Value;throw new IOException("fixture drag-apply failure");},delegate{foreach(var entry in current)simulated[entry.Key]=entry.Value;});}catch(InvalidOperationException){failed=true;}
+      bool restored=failed;foreach(var entry in current)restored&=simulated.ContainsKey(entry.Key) && simulated[entry.Key]==entry.Value;
+      check(restored,"Failed drag setup restores the complete five-value pre-operation snapshot including both four-finger choices");
+    }
+    static void IntentWarningChecks(Action<bool,string> check) {
+      check(!AppController.ConfigurationNeedsAttention(false,true,false,false),"An intentionally paused drag does not ask the user to configure it");
+      check(!AppController.ConfigurationNeedsAttention(true,false,false,false),"A locked or disconnected session defers configuration attention");
+      check(!AppController.ConfigurationNeedsAttention(true,true,true,false),"Isolated preview does not request real Windows gesture changes");
+      check(AppController.ConfigurationNeedsAttention(true,true,false,false),"Requested dragging with conflicting native gestures still needs configuration");
+      check(!AppController.ConfigurationNeedsAttention(true,true,false,true),"A ready active drag does not request configuration");
+      const string conflict="Ctrl＋左右键注册失败，可能被其他程序占用。";
+      check(AppController.ShortcutWarning(false,true,false,false,conflict)==null,"Deliberately disabled desktop shortcuts do not surface a stale conflict");
+      check(AppController.ShortcutWarning(true,false,false,false,conflict)==null,"Session-paused desktop shortcuts do not report intentional unregistration");
+      check(AppController.ShortcutWarning(true,true,true,false,null)==null,"Requested preview shortcuts are intentionally unregistered without warnings");
+      check(AppController.ShortcutWarning(true,true,false,false,conflict)==conflict,"A requested real shortcut registration conflict remains actionable");
+      check(AppController.ShortcutWarning(true,true,false,true,conflict)==conflict,"A real shortcut send failure is retained even while registration is active");
+      check(AppController.ShortcutWarning(true,true,false,true,null)==null,"Healthy registered shortcuts do not produce attention warnings");
+      check(!string.IsNullOrWhiteSpace(AppController.ShortcutWarning(true,true,false,false,null)),"Unexpectedly unregistered requested shortcuts keep a clear fallback warning");
+    }
     static void DragReadinessChecks(Action<bool,string> check) {
       var desktops=new GesturePreferences.CacheValues{threeTap=0,threeSlide=0,fourSlide=2};
       check(GesturePreferences.DragPreferencesReady(desktops),"Four-finger desktop switching does not block three-finger dragging");
@@ -90,8 +135,8 @@ namespace ThreeFingerDrag {
       check(!GesturePreferences.DragPreferencesReady(new GesturePreferences.CacheValues{threeTap=1,threeSlide=0,fourSlide=2}),"A conflicting three-finger tap still blocks dragging with desktop switching");
       check(!GesturePreferences.DragPreferencesReady(new GesturePreferences.CacheValues{threeTap=0,threeSlide=1,fourSlide=2}),"A conflicting three-finger slide still blocks dragging with desktop switching");
       check(!GesturePreferences.DragPreferencesReady(null),"Unavailable three-finger live state remains safely paused");
-      check(!GesturePreferences.LivePreferencesReady(desktops),"Explicit Apply still verifies its requested four-finger app-switch action");
-      check(GesturePreferences.LivePreferencesReady(new GesturePreferences.CacheValues{threeTap=0,threeSlide=0,fourSlide=1}),"Explicit Apply accepts its complete requested three-action state");
+      check(GesturePreferences.DragPreferencesReady(new GesturePreferences.CacheValues{threeTap=0,threeSlide=0,fourSlide=0}),"Four-finger gestures disabled in Windows do not block dragging");
+      check(GesturePreferences.DragPreferencesReady(new GesturePreferences.CacheValues{threeTap=0,threeSlide=0,fourSlide=1}),"Four-finger app switching remains compatible with dragging");
     }
     static void FailureChecks(Action<bool,string> check) {
       using(var logger=new Logger()) {

@@ -1,6 +1,6 @@
 {
-  "version": "0.1.1",
-  "assemblyVersion": "0.1.1.0",
+  "version": "0.1.2",
+  "assemblyVersion": "0.1.2.0",
   "platform": "win-x64",
   "framework": ".NET Framework 4.8"
 }
