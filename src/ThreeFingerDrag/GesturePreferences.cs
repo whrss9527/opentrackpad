@@ -165,8 +165,7 @@ namespace ThreeFingerDrag {
         LastReadinessDetail="checking saved values";
         using(RegistryKey key=Registry.CurrentUser.OpenSubKey(KeyPath)) {
           if(key==null || Convert.ToInt32(key.GetValue("ThreeFingerSlideEnabled",-1))!=0 ||
-             Convert.ToInt32(key.GetValue("ThreeFingerTapEnabled",-1))!=0 ||
-             Convert.ToInt32(key.GetValue("FourFingerSlideEnabled",-1))!=FourFingerAction){LastReadinessDetail="saved gesture values are not ready";return false;}
+             Convert.ToInt32(key.GetValue("ThreeFingerTapEnabled",-1))!=0){LastReadinessDetail="saved three-finger gesture values are not ready";return false;}
         }
         string file=Path.Combine(StatePath,"gesture-configuration.json");
         if(!File.Exists(file) && !File.Exists(AtomicJson.RecoveryPath(file))){LastReadinessDetail="configuration file is missing";return false;}
@@ -182,13 +181,19 @@ namespace ThreeFingerDrag {
         using(SettingsCache cache=new SettingsCache()) {
           CacheValues live=cache.Read();
           LastReadinessDetail="live gestures: "+live.threeTap+"/"+live.threeSlide+"/"+live.fourSlide;
-          return LivePreferencesReady(live);
+          return DragPreferencesReady(live);
         }
       }catch(Exception exception){LastReadinessDetail=exception.GetType().Name+": "+exception.Message;return false;}
     }
 
+    internal static bool DragPreferencesReady(CacheValues values) {
+      // Starting three-finger dragging must respect the user's independently
+      // chosen Windows four-finger action (desktops, apps, volume or none).
+      return values!=null && values.threeTap==0 && values.threeSlide==0;
+    }
     internal static bool LivePreferencesReady(CacheValues values) {
-      return values!=null && values.threeTap==0 && values.threeSlide==0 && values.fourSlide==FourFingerAction;
+      // An explicit Apply still verifies every action that operation requested.
+      return DragPreferencesReady(values) && values.fourSlide==FourFingerAction;
     }
 
     internal static bool CanActivateAfterSignIn(bool pending,string original,string current,DateTime configuredUtc,DateTime bootUtc) {

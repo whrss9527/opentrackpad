@@ -112,7 +112,7 @@ namespace ThreeFingerDrag {
         if(!configurationReady)configurationReady=GesturePreferences.IsSessionReady();
         if(!configurationReady)return;
         bool active=ActivateInput();
-        if(active)OnCoreStatus("三指拖移已启用；四指左右滑动切换应用窗口。");
+        if(active)OnCoreStatus("三指拖移已启用；四指手势遵循 Windows 设置。");
       };
       UpdateRegistrationRetry();
       speedTimer.Interval=2000;
@@ -128,7 +128,7 @@ namespace ThreeFingerDrag {
       if(CanRun)speedTimer.Start();
       ScheduleRuntimeRetry();
       if(!configurationReady && enabled)OnCoreStatus("等待系统应用手势设置：请在 Windows 触摸板设置中将三指轻扫和点击均设为“无”；生效后会自动启用。");
-      else OnCoreStatus(!string.IsNullOrEmpty(input.LastRegistrationError)?input.LastRegistrationError:desktopHotkeysRequested && !desktopHotkeys.Enabled?desktopHotkeys.LastError:DragActive?"三指拖移已启用；四指左右切换应用窗口。":"三指拖移已暂停，保留你的原有选择。");
+      else OnCoreStatus(!string.IsNullOrEmpty(input.LastRegistrationError)?input.LastRegistrationError:desktopHotkeysRequested && !desktopHotkeys.Enabled?desktopHotkeys.LastError:DragActive?"三指拖移已启用；四指手势遵循 Windows 设置。":"三指拖移已暂停，保留你的原有选择。");
       if(runtime.Paused)OnCoreStatus("会话已暂停；解锁或恢复连接后继续。");
       if(AppPaths.IsIsolated)OnCoreStatus("预览模式：设置仅保存在独立目录，不控制触摸板或系统快捷键。");
       if(settingsWarning!=null)OnCoreStatus(settingsWarning);
@@ -205,7 +205,7 @@ namespace ThreeFingerDrag {
       if(CanRun)speedTimer.Start();
       if (!value) input.Cancel("paused");
       string text = value
-        ? (configurationReady?"三指拖移已启用；四指左右滑动切换应用窗口。":"等待系统应用手势设置；三指轻扫和点击设为“无”后会自动启用。")
+        ? (configurationReady?"三指拖移已启用；四指手势遵循 Windows 设置。":"等待系统应用手势设置；三指轻扫和点击设为“无”后会自动启用。")
         : "三指拖移已暂停。可点击“恢复原生手势”恢复 Windows 三指操作。";
       if(AppPaths.IsIsolated)text="预览模式：已记录本次选择，不控制系统输入。";
       else if(runtime.Paused)text="设置已保留，恢复会话后按你的选择继续。";

@@ -45,7 +45,7 @@ namespace ThreeFingerDrag {
       originalEntries.RemoveAt(originalEntries.Count-1);originalEntries.RemoveAt(0);rejected=false;
       try{GesturePreferences.DecodeOriginalValues(originalSnapshot);}catch(InvalidDataException){rejected=true;}
       check(rejected,"Incomplete original gesture snapshots rejected before any system write");
-      SnapshotChecks(check);CliChecks(check);FailureChecks(check);
+      SnapshotChecks(check);CliChecks(check);FailureChecks(check);DragReadinessChecks(check);
       string parent=Path.GetDirectoryName(Path.GetFullPath(output));Directory.CreateDirectory(parent);
       string fixture=Path.GetFullPath(Path.Combine(parent,"runtime-fixture-"+Guid.NewGuid().ToString("N")));
       Directory.CreateDirectory(fixture);
@@ -83,6 +83,16 @@ namespace ThreeFingerDrag {
       return new Dictionary<string,object>{{"values",entries}};
     }
     static bool Invalid(Action action) {try{action();return false;}catch(InvalidDataException){return true;}}
+    static void DragReadinessChecks(Action<bool,string> check) {
+      var desktops=new GesturePreferences.CacheValues{threeTap=0,threeSlide=0,fourSlide=2};
+      check(GesturePreferences.DragPreferencesReady(desktops),"Four-finger desktop switching does not block three-finger dragging");
+      check(desktops.fourSlide==2,"Checking drag readiness preserves the user's four-finger action");
+      check(!GesturePreferences.DragPreferencesReady(new GesturePreferences.CacheValues{threeTap=1,threeSlide=0,fourSlide=2}),"A conflicting three-finger tap still blocks dragging with desktop switching");
+      check(!GesturePreferences.DragPreferencesReady(new GesturePreferences.CacheValues{threeTap=0,threeSlide=1,fourSlide=2}),"A conflicting three-finger slide still blocks dragging with desktop switching");
+      check(!GesturePreferences.DragPreferencesReady(null),"Unavailable three-finger live state remains safely paused");
+      check(!GesturePreferences.LivePreferencesReady(desktops),"Explicit Apply still verifies its requested four-finger app-switch action");
+      check(GesturePreferences.LivePreferencesReady(new GesturePreferences.CacheValues{threeTap=0,threeSlide=0,fourSlide=1}),"Explicit Apply accepts its complete requested three-action state");
+    }
     static void FailureChecks(Action<bool,string> check) {
       using(var logger=new Logger()) {
         logger.SuppressDisk=true;int delivered=0;
