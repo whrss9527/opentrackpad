@@ -1,0 +1,168 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Threading;
+using System.Diagnostics;
+using System.Web.Script.Serialization;
+using OpenTrackpadShared;
+
+namespace ThreeFingerDrag {
+  static class RuntimeDiagnostics {
+    public static void Run(string output) {
+      var checks=new List<string>();
+      Action<bool,string> check=delegate(bool passed,string name){if(!passed)throw new InvalidOperationException(name);checks.Add(name);};
+      var gate=new RuntimeGate();
+      check(gate.Paused,"Unknown session starts paused");
+      gate.Snapshot(true,false,true);check(!gate.Paused,"Verified active session resumes");
+      gate.Apply(RuntimeEvent.Lock);gate.Apply(RuntimeEvent.Suspend);gate.Apply(RuntimeEvent.Resume);
+      check(gate.Paused && gate.Locked,"Power resume preserves session lock");
+      gate.Apply(RuntimeEvent.Disconnect);gate.Apply(RuntimeEvent.Unlock);
+      check(gate.Paused && !gate.Connected,"Unlock does not clear a disconnected session");
+      gate.Apply(RuntimeEvent.Connect);check(!gate.Paused,"Reconnection honors unlocked state");
+      gate.Apply(RuntimeEvent.Lock);gate.Apply(RuntimeEvent.Connect);check(gate.Paused,"Reconnection preserves session lock");
+      gate.Snapshot(true,false,true);check(gate.Paused && gate.Locked,"Stale active snapshot cannot clear an explicit session lock");
+      gate.Apply(RuntimeEvent.Unlock);gate.Apply(RuntimeEvent.Disconnect);gate.Snapshot(true,false,true);
+      check(gate.Paused && !gate.Connected,"Stale connected snapshot cannot clear an explicit disconnect");
+      gate.Apply(RuntimeEvent.Resume);check(gate.Paused,"Power resume cannot clear an explicit disconnect");
+      gate.Apply(RuntimeEvent.Connect);gate.Apply(RuntimeEvent.Suspend);gate.Snapshot(true,false,true);
+      check(gate.Paused && gate.Suspended,"Active snapshot cannot clear suspend before its resume event");
+      gate.Apply(RuntimeEvent.Resume);check(!gate.Paused,"Matching activation events release only their own blockers");
+      gate.Snapshot(false,false,true);check(gate.Paused,"Failed state query remains paused");
+      gate.Snapshot(true,false,true);gate.Apply(RuntimeEvent.Suspend);check(gate.Paused,"Suspend gates active input");
+      var retry=new RuntimeRetry();check(retry.Next()==5000 && retry.Next()==10000 && retry.Next()==20000 && retry.Next()==40000 && retry.Next()==60000 && retry.Next()==60000,"Activation retries back off to one query per minute");
+      retry.Reset();check(retry.Next()==5000,"A new activation event resets the retry delay");
+      check(AppPaths.ProfileId(@"C:\OpenTrackpad\One")!=AppPaths.ProfileId(@"C:\OpenTrackpad\Two"),"Independent profile instances have independent names");
+      check(AppPaths.ProfileId(@"C:\OpenTrackpad\One")==AppPaths.ProfileId(@"c:\opentrackpad\one\"),"Profile names normalize Windows path case");
+      bool rejected=false;try{AppPaths.StateFile("..\\escape.json");}catch(ArgumentException){rejected=true;}
+      check(rejected,"State filenames reject path traversal");
+      var originalEntries=new List<object>();
+      foreach(string name in new[]{"ThreeFingerSlideEnabled","ThreeFingerTapEnabled","FourFingerSlideEnabled","FourFingerTapEnabled","TapAndDrag"})originalEntries.Add(new Dictionary<string,object>{{"name",name},{"exists",true},{"kind","DWord"},{"value",1}});
+      var originalSnapshot=new Dictionary<string,object>{{"values",originalEntries}};
+      check(GesturePreferences.DecodeOriginalValues(originalSnapshot).Count==5,"Original gesture snapshot validated as a complete set before restoration");
+      originalEntries.Add(originalEntries[0]);rejected=false;
+      try{GesturePreferences.DecodeOriginalValues(originalSnapshot);}catch(InvalidDataException){rejected=true;}
+      check(rejected,"Duplicate original gesture entries rejected before any system write");
+      originalEntries.RemoveAt(originalEntries.Count-1);originalEntries.RemoveAt(0);rejected=false;
+      try{GesturePreferences.DecodeOriginalValues(originalSnapshot);}catch(InvalidDataException){rejected=true;}
+      check(rejected,"Incomplete original gesture snapshots rejected before any system write");
+      SnapshotChecks(check);CliChecks(check);
+      string parent=Path.GetDirectoryName(Path.GetFullPath(output));Directory.CreateDirectory(parent);
+      string fixture=Path.GetFullPath(Path.Combine(parent,"runtime-fixture-"+Guid.NewGuid().ToString("N")));
+      Directory.CreateDirectory(fixture);
+      try {
+        string file=Path.Combine(fixture,"options.json");
+        var values=new Dictionary<string,object>{{"enabled",false},{"desktopHotkeys",true},{"extension",42}};
+        AtomicJson.Write(file,values);
+        check(File.Exists(file) && File.Exists(AtomicJson.RecoveryPath(file)),"Settings and recovery copy saved");
+        check(((Dictionary<string,object>)AtomicJson.Read(file,null).Value).ContainsKey("extension"),"Unknown configuration fields retained");
+        File.WriteAllText(file,"{broken");var recovered=AtomicJson.Read(file,null);
+        check(recovered.Recovered && Convert.ToInt32(((Dictionary<string,object>)recovered.Value)["extension"])==42,"Damaged primary reads valid recovery copy");
+        AtomicJson.PreserveDamaged(file);check(Directory.GetFiles(fixture,"options.damaged-*.json").Length==1,"Repair retains original damaged data");
+        File.WriteAllText(AtomicJson.RecoveryPath(file),"broken");check(AtomicJson.Read(file,null).Unreadable,"Both unreadable files are reported without overwriting");
+        string legacy=Path.Combine(fixture,"legacy"),target=Path.Combine(fixture,"current");Directory.CreateDirectory(Path.Combine(legacy,"state"));
+        foreach(string name in new[]{"gesture-options.json","gesture-configuration.json","gestures-before.json","gesture-effective-before.json","pointer-speed-before.json"})AtomicJson.Write(Path.Combine(legacy,"state",name),values);
+        File.WriteAllText(Path.Combine(legacy,"state","do-not-import.json"),"{\"private\":true}");
+        AtomicJson.Write(Path.Combine(legacy,"state","baseline.json"),new {originalDriver="fixture-driver"});
+        int copied=AppPaths.ImportLegacyState(legacy,target);
+        check(copied==6 && File.Exists(Path.Combine(target,"state","gesture-configuration.json")),"Legacy options, activation and original gesture snapshots imported");
+        check(File.Exists(Path.Combine(target,"state","legacy-driver-recovery.json")) && !File.Exists(Path.Combine(target,"state","baseline.json")),"Old driver recovery metadata retained separately without claiming new-package rollback");
+        check(!File.Exists(Path.Combine(target,"state","do-not-import.json")),"Migration imports only known configuration files");
+        check(AppPaths.ImportLegacyState(legacy,target)==0,"Migration never overwrites newer data");
+        if(AppPaths.IsIsolated)check(AppPaths.MigrateLegacyState()==0,"Isolated preview never migrates real user state");
+        AtomicChecks(fixture,check);
+        InvalidCliProcesses(fixture,check);
+      }finally {
+        string normalized=Path.GetFullPath(fixture);
+        if(Path.GetDirectoryName(normalized)==parent && Path.GetFileName(normalized).StartsWith("runtime-fixture-",StringComparison.Ordinal) && Directory.Exists(normalized))Directory.Delete(normalized,true);
+      }
+      File.WriteAllText(output,new JavaScriptSerializer().Serialize(new {success=true,checks=checks,systemSettingsWritten=false,inputInjected=false,realUserDataRead=false}));
+    }
+    static Dictionary<string,object> OriginalSnapshot() {
+      var entries=new List<object>();
+      foreach(string name in new[]{"ThreeFingerSlideEnabled","ThreeFingerTapEnabled","FourFingerSlideEnabled","FourFingerTapEnabled","TapAndDrag"})entries.Add(new Dictionary<string,object>{{"name",name},{"exists",true},{"kind","DWord"},{"value",1}});
+      return new Dictionary<string,object>{{"values",entries}};
+    }
+    static bool Invalid(Action action) {try{action();return false;}catch(InvalidDataException){return true;}}
+    static void SnapshotChecks(Action<bool,string> check) {
+      var original=OriginalSnapshot();var decoded=GesturePreferences.DecodeOriginalValues(original);
+      check(!GesturePreferences.OriginalTapAndDrag(original,decoded).HasValue,"Legacy registry values never invent the independent native tap-and-drag bit");
+      original["tapAndDragEnabled"]=true;check(GesturePreferences.OriginalTapAndDrag(original,decoded)==true,"New snapshot retains a true native tap-and-drag bit");
+      original["tapAndDragEnabled"]=false;check(GesturePreferences.OriginalTapAndDrag(original,decoded)==false,"New snapshot retains a false native tap-and-drag bit");
+      original["tapAndDragEnabled"]=1;check(Invalid(delegate{GesturePreferences.OriginalTapAndDrag(original,decoded);}),"Malformed native-bit evidence is rejected before writes");
+      foreach(object number in new object[]{null,true,"1",1.5,-2147483649L,4294967296L,double.NaN,double.PositiveInfinity}) {
+        original=OriginalSnapshot();((Dictionary<string,object>)((List<object>)original["values"])[4])["value"]=number;
+        check(Invalid(delegate{GesturePreferences.DecodeOriginalValues(original);}),"Original snapshot rejects invalid last-field DWORD: "+(number==null?"null":Convert.ToString(number)));
+      }
+      original=OriginalSnapshot();((Dictionary<string,object>)((List<object>)original["values"])[0])["value"]=uint.MaxValue;
+      check(GesturePreferences.DecodeOriginalValues(original)["ThreeFingerSlideEnabled"]==-1,"Unsigned DWORD original retains all 32 bits");
+      var effective=new Dictionary<string,object>{{"threeTap",0},{"threeSlide",0},{"fourSlide",uint.MaxValue}};
+      check(GesturePreferences.DecodeEffectiveValues(effective).fourSlide==uint.MaxValue,"Complete effective snapshot accepts the unsigned DWORD boundary");
+      foreach(object number in new object[]{null,true,"1",1.5,-1,4294967296L}) {
+        effective["fourSlide"]=number;
+        check(Invalid(delegate{GesturePreferences.DecodeEffectiveValues(effective);}),"Effective snapshot rejects invalid last-field value: "+(number==null?"null":Convert.ToString(number)));
+      }
+      effective.Remove("fourSlide");check(Invalid(delegate{GesturePreferences.DecodeEffectiveValues(effective);}),"Missing effective fields fail before any system mutation");
+      int simulated=1;bool failed=false;
+      try{GestureTransaction.Run<int>(delegate{simulated=2;throw new IOException("fixture mutation failure");},delegate{simulated=1;});}catch(InvalidOperationException error){failed=error.InnerException is IOException;}
+      check(failed && simulated==1,"Failed gesture mutation restores the complete simulated previous state");
+      int attempted=0;failed=false;
+      try{GestureTransaction.RestoreAll(new Action[]{delegate{attempted++;throw new IOException("fixture restore failure");},delegate{attempted++;},delegate{attempted++;throw new InvalidOperationException("second fixture failure");}});}catch(AggregateException error){failed=error.InnerExceptions.Count==2;}
+      check(failed && attempted==3,"Rollback attempts every independent restore and reports all failures");
+      failed=false;try{GestureTransaction.Run<int>(delegate{throw new IOException("fixture failure");},delegate{throw new IOException("fixture restore failure");});}catch(InvalidOperationException error){failed=error.InnerException is AggregateException && error.Message.IndexOf("可能已更改",StringComparison.Ordinal)>=0;}
+      check(failed,"Incomplete rollback is explicitly reported instead of claiming recovery success");
+    }
+    static void CliChecks(Action<bool,string> check) {
+      CliOptions parsed;
+      foreach(string[] values in new[]{new[]{"--unknown"},new[]{"--set-speed","13"},new[]{"--set-speed","0","report.json"},new[]{"--set-speed","21","report.json"},new[]{"--set-speed","1.5","report.json"},new[]{"--set-speed","10","report.json","extra"},new[]{"--query-speed"},new[]{"--shutdown","extra"},new[]{"--configure",""},new[]{"--query-config","--shutdown"},new[]{"--preview","--preview"}})
+        check(!CliOptions.TryParse(values,out parsed),"Strict CLI rejects: "+string.Join(" ",values));
+      foreach(string verb in new[]{"--self-test-runtime","--test-speed-response","--query-speed","--restore-speed","--test-speed","--test-speed-undo","--configure","--restore","--query-config","--self-test","--self-test-available","--render","--render-diagnostics","--render-appearance","--render-compact"}) {
+        check(CliOptions.TryParse(new[]{verb,"report.json"},out parsed),"Strict CLI preserves valid verb: "+verb);
+        check(!CliOptions.TryParse(new[]{verb},out parsed) && !CliOptions.TryParse(new[]{verb,"report.json","extra"},out parsed),"Strict CLI rejects incomplete/extra arguments for: "+verb);
+      }
+      check(CliOptions.TryParse(new[]{"--preview","--set-speed","1","report.json"},out parsed) && parsed.Preview && parsed.Arguments.Length==3,"Preview CLI retains exact normalized argument arity");
+      check(CliOptions.TryParse(new[]{"--set-speed","20","report.json"},out parsed),"Strict CLI accepts the upper speed boundary");
+      foreach(string verb in new[]{"--render","--render-diagnostics","--render-appearance","--render-compact"})check(CliOptions.TryParse(new[]{verb,"report.png"},out parsed) && parsed.Preview,"Rendering automatically isolates: "+verb);
+    }
+    static void AtomicChecks(string fixture,Action<bool,string> check) {
+      string file=Path.Combine(fixture,"atomic.json");AtomicJson.Write(file,new{version=1});
+      string oldPrimary=File.ReadAllText(file),oldMirror=File.ReadAllText(AtomicJson.RecoveryPath(file));bool rejected=false;
+      using(var locked=new FileStream(file,FileMode.Open,FileAccess.Read,FileShare.Read))try{AtomicJson.Write(file,new{version=2});}catch(IOException){rejected=true;}
+      check(rejected && File.ReadAllText(file)==oldPrimary && File.ReadAllText(AtomicJson.RecoveryPath(file))==oldMirror,"Failed primary commit rolls the recovery copy back to its previous bytes");
+      rejected=false;
+      using(var locked=new FileStream(AtomicJson.RecoveryPath(file),FileMode.Open,FileAccess.Read,FileShare.Read))try{AtomicJson.Write(file,new{version=3});}catch(IOException){rejected=true;}
+      check(rejected && File.ReadAllText(file)==oldPrimary && File.ReadAllText(AtomicJson.RecoveryPath(file))==oldMirror,"Locked recovery copy leaves both previous versions untouched");
+      using(var acquired=new ManualResetEvent(false))using(var release=new ManualResetEvent(false)) {
+        Exception holderFailure=null;
+        var holder=new Thread(delegate(){try{AtomicJson.WithLock(file,delegate{acquired.Set();release.WaitOne();return true;});}catch(Exception error){holderFailure=error;acquired.Set();}});
+        holder.Start();try {
+          if(!acquired.WaitOne(5000) || holderFailure!=null)throw new InvalidOperationException("Fixture failed to acquire its settings lock",holderFailure);
+          rejected=false;try{AtomicJson.Write(file,new{version=4});}catch(IOException){rejected=true;}
+          check(rejected,"An independent lock holder causes a clear write timeout without overwriting data");
+          check(AtomicJson.Read(file,null).Unreadable,"Busy reads fail closed rather than silently loading defaults");
+        }finally{release.Set();if(!holder.Join(5000))throw new InvalidOperationException("Fixture lock holder did not exit");}
+      }
+      check(File.ReadAllText(file)==oldPrimary && File.ReadAllText(AtomicJson.RecoveryPath(file))==oldMirror,"Lock contention preserves both original copies");
+      Exception writeFailure=null;object failureLock=new object();
+      ThreadStart first=delegate {try{for(int i=0;i<20;i++)AtomicJson.Write(file,new{writer=Thread.CurrentThread.ManagedThreadId,revision=i});}catch(Exception error){lock(failureLock){writeFailure=error;}}};
+      var one=new Thread(first);var two=new Thread(first);one.Start();two.Start();one.Join();two.Join();
+      if(writeFailure!=null)throw new InvalidOperationException("Concurrent fixture settings writes failed",writeFailure);
+      check(AtomicJson.WithLock(file,delegate{return File.ReadAllText(file)==File.ReadAllText(AtomicJson.RecoveryPath(file));}),"Concurrent settings writers leave matching primary and recovery versions");
+      check(Directory.GetFiles(fixture,"*.tmp").Length==0 && Directory.GetFiles(fixture,"*.rollback").Length==0,"Completed and rolled-back saves leave no abandoned staging files");
+    }
+    static void InvalidCliProcesses(string fixture,Action<bool,string> check) {
+      string executable=System.Reflection.Assembly.GetExecutingAssembly().Location;
+      if(!string.Equals(Path.GetFileName(executable),"OpenTrackpad.exe",StringComparison.OrdinalIgnoreCase))return;
+      int count=0;
+      foreach(string arguments in new[]{"--unknown","--set-speed 13","--set-speed 0 output.json","--set-speed 21 output.json","--set-speed 10 output.json extra","--query-speed","--shutdown extra","--render-appearance","--configure","--preview --preview"}) {
+        var start=new ProcessStartInfo(executable,arguments){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=fixture};
+        start.EnvironmentVariables["OPENTRACKPAD_DATA_DIR"]=Path.Combine(fixture,"invalid-cli-"+count++);
+        start.EnvironmentVariables.Remove("OPENTRACKPAD_LEGACY_DIR");
+        using(Process process=Process.Start(start)) {
+          if(!process.WaitForExit(5000)){process.Kill();throw new InvalidOperationException("Invalid isolated CLI failed to exit promptly: "+arguments);}
+          check(process.ExitCode==2,"Isolated invalid CLI exits 2 before IPC/system setup: "+arguments);
+        }
+      }
+      check(Directory.GetDirectories(fixture,"invalid-cli-*").Length==0 && !File.Exists(Path.Combine(fixture,"output.json")),"Rejected CLI creates no application state or report files");
+    }
+  }
+}

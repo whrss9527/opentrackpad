@@ -1,0 +1,17 @@
+build/
+artifacts/
+state/
+logs/
+recovery/
+analysis/
+.vs/
+*.exe
+*.dll
+*.sys
+*.cat
+*.pdb
+*.zip
+*.log
+*.tmp
+*.user
+*.suo

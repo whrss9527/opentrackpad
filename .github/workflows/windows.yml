@@ -1,0 +1,37 @@
+name: Windows build and isolated checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check clean source boundaries
+        shell: powershell
+        run: ./scripts/Verify-Source.ps1
+      - name: Build both applications
+        shell: powershell
+        run: ./scripts/Build.ps1
+      - name: Deterministic and isolated runtime checks
+        shell: powershell
+        run: ./scripts/Verify.ps1 -SkipBuild
+      - name: Prepare clean portable and source packages
+        shell: powershell
+        run: ./scripts/Package.ps1 -SkipBuild
+      - uses: actions/upload-artifact@v7
+        with:
+          name: OpenTrackpad-Windows-x64
+          path: |
+            artifacts/*.zip
+            artifacts/SHA256SUMS.txt
+            build/verify/*.json
+          if-no-files-found: error
