@@ -13,6 +13,7 @@ namespace OpenTrackpadUi {
     public static Color Surface{get{return SystemInformation.HighContrast?SystemColors.Window:ColorOf(0xffffff,0x252932);}}
     public static Color Ink{get{return SystemInformation.HighContrast?SystemColors.WindowText:ColorOf(0x252935,0xf0f1f5);}}
     public static Color Muted{get{return SystemInformation.HighContrast?SystemColors.WindowText:ColorOf(0x6b7283,0xaeb5c3);}}
+    public static Color DisabledInk{get{return SystemInformation.HighContrast?SystemColors.GrayText:ColorOf(0x7d8594,0x8992a2);}}
     public static Color Line{get{return SystemInformation.HighContrast?SystemColors.WindowText:ColorOf(0xe4e7ee,0x3a404e);}}
     public static Color Accent{get{return SystemInformation.HighContrast?SystemColors.Highlight:ColorOf(0x147d69,0x78dec3);}}
     public static Color PrimaryInk{get{return SystemInformation.HighContrast?SystemColors.HighlightText:UiPreferences.Dark?Color.FromArgb(16,41,34):Color.White;}}
@@ -23,8 +24,8 @@ namespace OpenTrackpadUi {
     public static Color NavMuted{get{return SystemInformation.HighContrast?SystemColors.WindowText:ColorOf(0x616a7a,0xaeb5c3);}}
     public static Color NavSelected{get{return SystemInformation.HighContrast?SystemColors.Highlight:ColorOf(0xffffff,0x373e4b);}}
     public static Color GentleEdge{get{return SystemInformation.HighContrast?Line:Color.FromArgb(UiPreferences.Dark?100:130,Line);}}
-    public static Color LogSurface{get{return Color.FromArgb(23,32,46);}}
-    public static Color LogInk{get{return Color.FromArgb(200,216,236);}}
+    public static Color LogSurface{get{return Surface;}}
+    public static Color LogInk{get{return Ink;}}
     public static Font Font(float size,FontStyle style){return FontFor(UiPreferences.FontFamily,size,style);}
     public static Font FontFor(string family,float size,FontStyle style){
       string key=family+"|"+size.ToString("0.###",CultureInfo.InvariantCulture)+"|"+(int)style;
@@ -48,10 +49,10 @@ namespace OpenTrackpadUi {
       protected override void OnRenderImageMargin(ToolStripRenderEventArgs e){}
       protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e){e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;using(var path=Round(new RectangleF(.5f,.5f,e.ToolStrip.Width-1,e.ToolStrip.Height-1),10))using(var pen=new Pen(Line))e.Graphics.DrawPath(pen,path);}
       protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e){if(e.Item.Selected || e.Item.Pressed){using(var path=Round(new RectangleF(1,1,e.Item.Width-2,e.Item.Height-2),6))using(var fill=new SolidBrush(Hover))e.Graphics.FillPath(fill,path);}}
-      protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e){e.TextColor=SystemInformation.HighContrast && (e.Item.Selected || e.Item.Pressed)?SystemColors.HighlightText:e.Item.Enabled?Ink:Muted;base.OnRenderItemText(e);}
+      protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e){e.TextColor=!e.Item.Enabled?DisabledInk:SystemInformation.HighContrast && (e.Item.Selected || e.Item.Pressed)?SystemColors.HighlightText:Ink;base.OnRenderItemText(e);}
       protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e){using(var pen=new Pen(Line))e.Graphics.DrawLine(pen,7,e.Item.Height/2,e.Item.Width-7,e.Item.Height/2);}
-      protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e){Rectangle r=e.ImageRectangle;using(var pen=new Pen(SystemInformation.HighContrast && e.Item.Selected?SystemColors.HighlightText:Accent,1.7f))e.Graphics.DrawLines(pen,new[]{new Point(r.Left+2,r.Top+r.Height/2),new Point(r.Left+r.Width/2-1,r.Bottom-3),new Point(r.Right-2,r.Top+3)});}
-      protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e){e.ArrowColor=SystemInformation.HighContrast && e.Item.Selected?SystemColors.HighlightText:e.Item.Enabled?Muted:Line;base.OnRenderArrow(e);}
+      protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e){Rectangle r=e.ImageRectangle;using(var pen=new Pen(!e.Item.Enabled?DisabledInk:SystemInformation.HighContrast && e.Item.Selected?SystemColors.HighlightText:Accent,1.7f))e.Graphics.DrawLines(pen,new[]{new Point(r.Left+2,r.Top+r.Height/2),new Point(r.Left+r.Width/2-1,r.Bottom-3),new Point(r.Right-2,r.Top+3)});}
+      protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e){e.ArrowColor=!e.Item.Enabled?DisabledInk:SystemInformation.HighContrast && e.Item.Selected?SystemColors.HighlightText:Muted;base.OnRenderArrow(e);}
     }
     [DllImport("dwmapi.dll")]static extern int DwmSetWindowAttribute(IntPtr window,int attribute,ref int value,int size);
     [DllImport("uxtheme.dll",CharSet=CharSet.Unicode)]static extern int SetWindowTheme(IntPtr window,string application,string classes);
@@ -61,11 +62,11 @@ namespace OpenTrackpadUi {
       FontStyle style=control.Font.Style;
       if(control is Label && control.Font.SizeInPoints>=11 && (Convert.ToString(control.Tag)=="ink" || navigation))style=FontStyle.Bold;
       control.Font=Font(control.Font.SizeInPoints,style);
-      if(control is TextBox){control.BackColor=LogSurface;control.ForeColor=LogInk;control.Font=FontFor("Consolas",9,FontStyle.Regular);}
+      if(control is TextBox){control.BackColor=LogSurface;control.ForeColor=LogInk;control.Font=Font(9,FontStyle.Regular);}
       else if(control is Panel || control is Form)control.BackColor=navigation?Nav:control is Card?Canvas:Convert.ToString(control.Tag)=="surface"?Surface:Canvas;
       else if(control is SpeedSlider)control.BackColor=Surface;
       else if(control is Label){string role=Convert.ToString(control.Tag);control.ForeColor=navigation?(role=="nav-title"?NavInk:NavMuted):role=="accent"?Accent:role=="muted"?Muted:Ink;control.BackColor=Color.Transparent;}
-      if(control.IsHandleCreated){try{if(control is Form){int dark=UiPreferences.Dark?1:0,corner=2;DwmSetWindowAttribute(control.Handle,20,ref dark,4);DwmSetWindowAttribute(control.Handle,33,ref corner,4);}else if(control is TextBox || control is ScrollableControl)SetWindowTheme(control.Handle,UiPreferences.Dark?"DarkMode_Explorer":"Explorer",null);}catch(DllNotFoundException){}catch(EntryPointNotFoundException){}}
+      if(control.IsHandleCreated){try{if(control is Form){int dark=!SystemInformation.HighContrast && UiPreferences.Dark?1:0,corner=2;DwmSetWindowAttribute(control.Handle,20,ref dark,4);DwmSetWindowAttribute(control.Handle,33,ref corner,4);}else if(control is TextBox || control is ScrollableControl)SetWindowTheme(control.Handle,SystemInformation.HighContrast?null:UiPreferences.Dark?"DarkMode_Explorer":"Explorer",null);}catch(DllNotFoundException){}catch(EntryPointNotFoundException){}}
       foreach(Control child in control.Controls)ApplyControl(child,navigation);control.Invalidate();
     }
     public static GraphicsPath Round(RectangleF r,float radius){float d=Math.Min(radius*2,Math.Min(r.Width,r.Height));var p=new GraphicsPath();if(d<=0){p.AddRectangle(r);return p;}p.AddArc(r.X,r.Y,d,d,180,90);p.AddArc(r.Right-d,r.Y,d,d,270,90);p.AddArc(r.Right-d,r.Bottom-d,d,d,0,90);p.AddArc(r.X,r.Bottom-d,d,d,90,90);p.CloseFigure();return p;}
@@ -89,49 +90,97 @@ namespace OpenTrackpadUi {
       e.Graphics.Clear(Parent is Card?Palette.Surface:Parent==null?Palette.Canvas:Parent.BackColor);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;float s=e.Graphics.DpiX/96;
       Color fill=Navigation?(Selected?Palette.NavSelected:hover?Palette.Hover:Palette.Nav):Primary?(hover?ControlPaint.Light(Palette.Accent,.08f):Palette.Accent):hover?Palette.Hover:Palette.Surface;
       Color ink=Navigation?(Selected?(SystemInformation.HighContrast?Palette.PrimaryInk:Palette.Ink):Palette.NavMuted):Primary?Palette.PrimaryInk:Palette.Ink;
-      if(!Enabled){fill=SystemInformation.HighContrast?Palette.Surface:Palette.Hover;ink=Palette.Muted;}
+      if(SystemInformation.HighContrast && Enabled && (Primary || Selected && Navigation || hover)){fill=SystemColors.Highlight;ink=SystemColors.HighlightText;}
+      if(!Enabled){fill=SystemInformation.HighContrast?Palette.Surface:Palette.Hover;ink=Palette.DisabledInk;}
       using(var path=Palette.Round(new RectangleF(1,1,Width-2,Height-2),8*s))using(var brush=new SolidBrush(fill)){e.Graphics.FillPath(brush,path);if(!Navigation && !Primary)using(var pen=new Pen(Palette.GentleEdge,s))e.Graphics.DrawPath(pen,path);}
-      if(Navigation){Glyphs.Draw(e.Graphics,new RectangleF(17*s,(Height-20*s)/2,20*s,20*s),NavigationIcon,Selected?(SystemInformation.HighContrast?Palette.PrimaryInk:Palette.Accent):ink);Rectangle text=new Rectangle((int)(48*s),0,Math.Max(1,Width-(int)(55*s)),Height);TextRenderer.DrawText(e.Graphics,Text,Font,text,ink,TextFormatFlags.Left|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);}
+      if(Navigation){Glyphs.Draw(e.Graphics,new RectangleF(17*s,(Height-20*s)/2,20*s,20*s),NavigationIcon,!Enabled?ink:Selected && !SystemInformation.HighContrast?Palette.Accent:ink);Rectangle text=new Rectangle((int)(48*s),0,Math.Max(1,Width-(int)(55*s)),Height);TextRenderer.DrawText(e.Graphics,Text,Font,text,ink,TextFormatFlags.Left|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);}
       else TextRenderer.DrawText(e.Graphics,Text,Font,ClientRectangle,ink,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);
       if(Focused && ShowFocusCues)ControlPaint.DrawFocusRectangle(e.Graphics,Rectangle.Inflate(ClientRectangle,-5,-5),ink,fill);
     }
   }
   sealed class ChoiceButton:ActionButton {
-    string[] options=new string[0];int selected;
+    string[] options=new string[0];int selected;ContextMenuStrip choices;bool disposing;
     public event EventHandler SelectionChanged;
     public IList<FontChoice> FontChoices=null;
     public string[] Options{get{return options;}set{options=value??new string[0];SelectedIndex=selected;}}
-    public int SelectedIndex{get{return selected;}set{int next=Math.Max(0,Math.Min(options.Length-1,value));bool changed=selected!=next;selected=next;Text=options.Length==0?"选择…":options[selected]+"   ▾";if(changed && SelectionChanged!=null)SelectionChanged(this,EventArgs.Empty);}}
-    public ChoiceButton(){AccessibleRole=AccessibleRole.ComboBox;}
-    protected override void OnClick(EventArgs e){base.OnClick(e);if(options.Length==0)return;var menu=new ContextMenuStrip();Palette.StyleMenu(menu);
+    public int SelectedIndex{get{return selected;}set{int next=Math.Max(0,Math.Min(options.Length-1,value));bool changed=selected!=next;selected=next;Text=options.Length==0?"选择…":options[selected]+"   ▾";if(IsHandleCreated)AccessibilityNotifyClients(AccessibleEvents.ValueChange,-1);if(changed && SelectionChanged!=null)SelectionChanged(this,EventArgs.Empty);}}
+    public ChoiceButton(){AccessibleRole=AccessibleRole.ComboBox;AccessibleDescription="使用方向键选择，按 Alt+向下键或 F4 展开选项。";}
+    protected override void OnClick(EventArgs e){base.OnClick(e);ShowChoices();}
+    void ShowChoices(){
+      if(!Enabled || IsDisposed || disposing || options.Length==0)return;
+      if(choices!=null){if(choices.Visible){choices.Close(ToolStripDropDownCloseReason.Keyboard);return;}choices.Dispose();choices=null;}
+      var menu=new ContextMenuStrip();choices=menu;Palette.StyleMenu(menu);
       for(int index=0;index<options.Length;index++){int choice=index;var item=new ToolStripMenuItem(options[index]);item.Checked=index==selected;
         if(FontChoices!=null && index<FontChoices.Count){item.Tag=FontChoices[index];item.Font=Palette.FontFor(FontChoices[index].Family,9.5f,FontStyle.Regular);}
         item.Click+=delegate{SelectedIndex=choice;};menu.Items.Add(item);
       }
-      menu.Closed+=delegate{menu.Dispose();if(!IsDisposed)Focus();};menu.Show(this,new Point(0,Height));
+      // Dispose after the close stack has returned, on the next open or with the owner.
+      menu.Closed+=delegate(object sender,ToolStripDropDownClosedEventArgs e){if(!IsDisposed && !disposing){AccessibilityNotifyClients(AccessibleEvents.StateChange,-1);if(Enabled && Visible && (e.CloseReason==ToolStripDropDownCloseReason.ItemClicked || e.CloseReason==ToolStripDropDownCloseReason.Keyboard))Focus();}};
+      menu.Show(this,new Point(0,Height));menu.Items[selected].Select();AccessibilityNotifyClients(AccessibleEvents.StateChange,-1);
+    }
+    protected override bool IsInputKey(Keys key){Keys code=key&Keys.KeyCode;if((key&Keys.Modifiers)==Keys.None && (code==Keys.Left || code==Keys.Right || code==Keys.Up || code==Keys.Down || code==Keys.Home || code==Keys.End))return true;return base.IsInputKey(key);}
+    protected override bool ProcessCmdKey(ref Message message,Keys key){if(key==Keys.F4 || key==(Keys.Alt|Keys.Down) || key==(Keys.Alt|Keys.Up)){if(Enabled)ShowChoices();return true;}return base.ProcessCmdKey(ref message,key);}
+    protected override void OnKeyDown(KeyEventArgs e){
+      if(Enabled && ((e.Modifiers==Keys.Alt && (e.KeyCode==Keys.Down || e.KeyCode==Keys.Up)) || e.Modifiers==Keys.None && e.KeyCode==Keys.F4)){ShowChoices();e.Handled=e.SuppressKeyPress=true;return;}
+      if(Enabled && e.Modifiers==Keys.None){int next=selected;if(e.KeyCode==Keys.Left || e.KeyCode==Keys.Up)next--;else if(e.KeyCode==Keys.Right || e.KeyCode==Keys.Down)next++;else if(e.KeyCode==Keys.Home)next=0;else if(e.KeyCode==Keys.End)next=options.Length-1;else{base.OnKeyDown(e);return;}SelectedIndex=next;e.Handled=e.SuppressKeyPress=true;return;}
+      base.OnKeyDown(e);
+    }
+    protected override void OnEnabledChanged(EventArgs e){base.OnEnabledChanged(e);if(!Enabled && choices!=null)choices.Close();Invalidate();}
+    protected override void Dispose(bool disposing){this.disposing=disposing;if(disposing && choices!=null){var menu=choices;choices=null;menu.Dispose();}base.Dispose(disposing);}
+    protected override AccessibleObject CreateAccessibilityInstance(){return new ChoiceAccessibility(this);}
+    sealed class ChoiceAccessibility:ControlAccessibleObject {
+      readonly ChoiceButton owner;
+      public ChoiceAccessibility(ChoiceButton owner):base(owner){this.owner=owner;}
+      public override AccessibleRole Role{get{return AccessibleRole.ComboBox;}}
+      public override AccessibleStates State{get{return base.State|AccessibleStates.Focusable|AccessibleStates.HasPopup|(owner.choices!=null && owner.choices.Visible?AccessibleStates.Expanded:AccessibleStates.Collapsed);}}
+      public override string Value{get{return owner.options.Length==0?String.Empty:owner.options[owner.selected];}set{if(!owner.Enabled)return;for(int index=0;index<owner.options.Length;index++)if(owner.options[index]==value){owner.SelectedIndex=index;break;}}}
+      public override string DefaultAction{get{return owner.choices!=null && owner.choices.Visible?"收起选项":"展开选项";}}
+      public override void DoDefaultAction(){owner.ShowChoices();}
     }
   }
   sealed class Toggle:CheckBox {
-    public Toggle(){AutoSize=false;Size=new Size(48,30);Text="";Cursor=Cursors.Hand;SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer,true);}
-    protected override void OnPaint(PaintEventArgs e){e.Graphics.Clear(Parent is Card?Palette.Surface:Parent==null?Palette.Canvas:Parent.BackColor);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;float s=e.Graphics.DpiX/96;using(var path=Palette.Round(new RectangleF(2*s,3*s,44*s,24*s),12*s))using(var fill=new SolidBrush(Enabled?(Checked?Palette.Accent:Color.FromArgb(209,217,228)):Palette.Line))e.Graphics.FillPath(fill,path);using(var brush=new SolidBrush(Palette.PrimaryInk))e.Graphics.FillEllipse(brush,(Checked?25:5)*s,6*s,18*s,18*s);if(Focused && ShowFocusCues)ControlPaint.DrawFocusRectangle(e.Graphics,ClientRectangle);}
+    public Toggle(){AutoSize=false;Size=new Size(48,30);Text="";Cursor=Cursors.Hand;AccessibleRole=AccessibleRole.CheckButton;AccessibleDescription="按空格键切换。";SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer,true);}
+    protected override void OnGotFocus(EventArgs e){base.OnGotFocus(e);Invalidate();}
+    protected override void OnLostFocus(EventArgs e){base.OnLostFocus(e);Invalidate();}
+    protected override void OnEnabledChanged(EventArgs e){base.OnEnabledChanged(e);Invalidate();}
+    protected override void OnPaint(PaintEventArgs e){
+      Color background=Parent is Card?Palette.Surface:Parent==null?Palette.Canvas:Parent.BackColor;e.Graphics.Clear(background);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;float s=e.Graphics.DpiX/96;
+      Color rail=Checked?Palette.Accent:UiPreferences.Dark?Palette.Line:Color.FromArgb(209,217,228),thumb=Checked?Palette.PrimaryInk:UiPreferences.Dark?Palette.Ink:Color.White;
+      if(SystemInformation.HighContrast){rail=Checked?SystemColors.Highlight:SystemColors.Control;thumb=Checked?SystemColors.HighlightText:SystemColors.ControlText;}
+      if(!Enabled){rail=SystemInformation.HighContrast?SystemColors.Control:Palette.Line;thumb=Palette.DisabledInk;}
+      using(var path=Palette.Round(new RectangleF(2*s,3*s,44*s,24*s),12*s))using(var fill=new SolidBrush(rail)){e.Graphics.FillPath(fill,path);if(SystemInformation.HighContrast)using(var edge=new Pen(Enabled?SystemColors.WindowText:SystemColors.GrayText,s))e.Graphics.DrawPath(edge,path);}
+      using(var brush=new SolidBrush(thumb))e.Graphics.FillEllipse(brush,(Checked?25:5)*s,6*s,18*s,18*s);
+      if(Focused && ShowFocusCues)ControlPaint.DrawFocusRectangle(e.Graphics,ClientRectangle,Palette.Ink,background);
+    }
+    protected override AccessibleObject CreateAccessibilityInstance(){return new ToggleAccessibility(this);}
+    sealed class ToggleAccessibility:CheckBoxAccessibleObject {
+      readonly Toggle owner;
+      public ToggleAccessibility(Toggle owner):base(owner){this.owner=owner;}
+      public override void DoDefaultAction(){if(owner.Enabled && !owner.IsDisposed)base.DoDefaultAction();}
+    }
   }
   sealed class SpeedSlider:Control {
-    int value=10;bool dragging,keyEditing;public event EventHandler ValueChanged,InteractionCompleted;
-    public bool IsInteracting {get{return dragging || keyEditing;}}
-    public void CancelInteraction(){dragging=keyEditing=false;Capture=false;Invalidate();}
-    void FinishInteraction(){bool active=IsInteracting;dragging=keyEditing=false;if(active && InteractionCompleted!=null)InteractionCompleted(this,EventArgs.Empty);}
+    // Unrelated key releases must not commit a still-held adjustment key.
+    int value=10;bool dragging;readonly HashSet<Keys> editingKeys=new HashSet<Keys>();public event EventHandler ValueChanged,InteractionCompleted;
+    public bool IsInteracting {get{return dragging || editingKeys.Count!=0;}}
+    public void CancelInteraction(){dragging=false;editingKeys.Clear();Capture=false;Invalidate();}
+    void FinishInteraction(){bool active=IsInteracting;CancelInteraction();if(active && InteractionCompleted!=null)InteractionCompleted(this,EventArgs.Empty);}
     public int Value{get{return value;}set{int next=Math.Max(1,Math.Min(20,value));if(next==this.value)return;this.value=next;Invalidate();AccessibilityNotifyClients(AccessibleEvents.ValueChange,-1);if(ValueChanged!=null)ValueChanged(this,EventArgs.Empty);}}
-    public SpeedSlider(){Height=44;TabStop=true;Cursor=Cursors.Hand;BackColor=Palette.Surface;AccessibleName="统一速度";AccessibleRole=AccessibleRole.Slider;SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw|ControlStyles.Selectable,true);}
+    public SpeedSlider(){Height=44;TabStop=true;Cursor=Cursors.Hand;BackColor=Palette.Surface;AccessibleName="统一速度";AccessibleRole=AccessibleRole.Slider;AccessibleDescription="速度范围 1 到 20；方向键微调，Home 最低，End 最高。";SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw|ControlStyles.Selectable,true);}
     void SetFromX(int x){float s;using(Graphics g=CreateGraphics())s=g.DpiX/96;float pad=14*s;Value=1+(int)Math.Round(19.0*(x-pad)/Math.Max(1,Width-2*pad));}
-    protected override void OnMouseDown(MouseEventArgs e){base.OnMouseDown(e);if(e.Button!=MouseButtons.Left)return;Focus();dragging=true;Capture=true;SetFromX(e.X);}protected override void OnMouseMove(MouseEventArgs e){base.OnMouseMove(e);if(dragging)SetFromX(e.X);}protected override void OnMouseUp(MouseEventArgs e){base.OnMouseUp(e);if(e.Button!=MouseButtons.Left)return;FinishInteraction();Capture=false;}
+    protected override void OnMouseDown(MouseEventArgs e){base.OnMouseDown(e);if(!Enabled || e.Button!=MouseButtons.Left)return;Focus();dragging=true;Capture=true;SetFromX(e.X);}protected override void OnMouseMove(MouseEventArgs e){base.OnMouseMove(e);if(dragging && Enabled)SetFromX(e.X);}protected override void OnMouseUp(MouseEventArgs e){base.OnMouseUp(e);if(e.Button!=MouseButtons.Left || !dragging)return;FinishInteraction();}
     protected override void OnMouseCaptureChanged(EventArgs e){base.OnMouseCaptureChanged(e);if(!Capture && dragging)FinishInteraction();}
-    protected override bool IsInputKey(Keys key){return key==Keys.Left || key==Keys.Right || key==Keys.Up || key==Keys.Down || base.IsInputKey(key);}
-    protected override void OnKeyDown(KeyEventArgs e){base.OnKeyDown(e);if(e.Modifiers!=Keys.None)return;if(e.KeyCode==Keys.Left || e.KeyCode==Keys.Down){keyEditing=true;Value--;}else if(e.KeyCode==Keys.Right || e.KeyCode==Keys.Up){keyEditing=true;Value++;}else if(e.KeyCode==Keys.Home){keyEditing=true;Value=1;}else if(e.KeyCode==Keys.End){keyEditing=true;Value=20;}else return;e.Handled=true;e.SuppressKeyPress=true;}
-    protected override void OnKeyUp(KeyEventArgs e){base.OnKeyUp(e);if(keyEditing)FinishInteraction();}
+    static bool AdjustmentKey(Keys key){return key==Keys.Left || key==Keys.Right || key==Keys.Up || key==Keys.Down || key==Keys.Home || key==Keys.End;}
+    protected override bool IsInputKey(Keys key){return (key&Keys.Modifiers)==Keys.None && AdjustmentKey(key&Keys.KeyCode) || base.IsInputKey(key);}
+    protected override void OnKeyDown(KeyEventArgs e){base.OnKeyDown(e);if(!Enabled || e.Modifiers!=Keys.None || !AdjustmentKey(e.KeyCode))return;editingKeys.Add(e.KeyCode);if(e.KeyCode==Keys.Left || e.KeyCode==Keys.Down)Value--;else if(e.KeyCode==Keys.Right || e.KeyCode==Keys.Up)Value++;else if(e.KeyCode==Keys.Home)Value=1;else Value=20;e.Handled=e.SuppressKeyPress=true;}
+    protected override void OnKeyUp(KeyEventArgs e){base.OnKeyUp(e);if(!editingKeys.Remove(e.KeyCode))return;if(editingKeys.Count==0 && !dragging){if(InteractionCompleted!=null)InteractionCompleted(this,EventArgs.Empty);}e.Handled=true;}
     protected override void OnGotFocus(EventArgs e){base.OnGotFocus(e);Invalidate();}protected override void OnLostFocus(EventArgs e){base.OnLostFocus(e);FinishInteraction();Invalidate();}
-    protected override void OnPaint(PaintEventArgs e){e.Graphics.Clear(Palette.Surface);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;float s=e.Graphics.DpiX/96,pad=14*s,y=Height/2f,x=pad+(Width-2*pad)*(Value-1)/19f;using(var track=new Pen(Palette.Line,6*s))using(var active=new Pen(Palette.Accent,6*s)){track.StartCap=track.EndCap=active.StartCap=active.EndCap=LineCap.Round;e.Graphics.DrawLine(track,pad,y,Width-pad,y);if(x>pad)e.Graphics.DrawLine(active,pad,y,x,y);}if(Focused)using(var halo=new SolidBrush(Palette.Soft))e.Graphics.FillEllipse(halo,x-15*s,y-15*s,30*s,30*s);using(var knob=new SolidBrush(Palette.Accent))e.Graphics.FillEllipse(knob,x-10*s,y-10*s,20*s,20*s);using(var core=new SolidBrush(Palette.PrimaryInk))e.Graphics.FillEllipse(core,x-4*s,y-4*s,8*s,8*s);}
+    protected override void OnEnabledChanged(EventArgs e){base.OnEnabledChanged(e);if(!Enabled)FinishInteraction();Invalidate();}
+    protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);if(!Visible)FinishInteraction();}
+    protected override void Dispose(bool disposing){if(disposing)CancelInteraction();base.Dispose(disposing);}
+    protected override void OnPaint(PaintEventArgs e){e.Graphics.Clear(Palette.Surface);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;float s=e.Graphics.DpiX/96,pad=14*s,y=Height/2f,x=pad+(Width-2*pad)*(Value-1)/19f;Color accent=Enabled?Palette.Accent:Palette.DisabledInk;using(var track=new Pen(Palette.Line,6*s))using(var active=new Pen(accent,6*s)){track.StartCap=track.EndCap=active.StartCap=active.EndCap=LineCap.Round;e.Graphics.DrawLine(track,pad,y,Width-pad,y);if(x>pad)e.Graphics.DrawLine(active,pad,y,x,y);}if(Focused && Enabled)using(var halo=new SolidBrush(Palette.Soft))e.Graphics.FillEllipse(halo,x-15*s,y-15*s,30*s,30*s);using(var knob=new SolidBrush(accent))e.Graphics.FillEllipse(knob,x-10*s,y-10*s,20*s,20*s);using(var core=new SolidBrush(Enabled?Palette.PrimaryInk:Palette.Surface))e.Graphics.FillEllipse(core,x-4*s,y-4*s,8*s,8*s);if(Focused && ShowFocusCues)ControlPaint.DrawFocusRectangle(e.Graphics,Rectangle.Inflate(ClientRectangle,-1,-1),Palette.Ink,Palette.Surface);}
     protected override AccessibleObject CreateAccessibilityInstance(){return new SliderAccessibility(this);}
-    sealed class SliderAccessibility:ControlAccessibleObject{readonly SpeedSlider slider;public SliderAccessibility(SpeedSlider slider):base(slider){this.slider=slider;}public override string Value{get{return slider.Value.ToString();}set{int parsed;if(int.TryParse(value,out parsed))slider.Value=parsed;}}public override AccessibleRole Role{get{return AccessibleRole.Slider;}}}
+    sealed class SliderAccessibility:ControlAccessibleObject{readonly SpeedSlider slider;public SliderAccessibility(SpeedSlider slider):base(slider){this.slider=slider;}public override string Value{get{return slider.Value.ToString(CultureInfo.InvariantCulture);}set{int parsed;if(!slider.Enabled || !int.TryParse(value,NumberStyles.Integer,CultureInfo.InvariantCulture,out parsed))return;slider.CancelInteraction();slider.Value=parsed;if(slider.InteractionCompleted!=null)slider.InteractionCompleted(slider,EventArgs.Empty);}}public override AccessibleRole Role{get{return AccessibleRole.Slider;}}public override AccessibleStates State{get{return base.State|AccessibleStates.Focusable;}}}
   }
   static class Glyphs {
     public static void Draw(Graphics graphics,RectangleF bounds,string kind,Color ink){var state=graphics.Save();graphics.TranslateTransform(bounds.X,bounds.Y);graphics.ScaleTransform(bounds.Width/24f,bounds.Height/24f);graphics.SmoothingMode=SmoothingMode.AntiAlias;using(var pen=new Pen(ink,1.6f)){pen.StartCap=pen.EndCap=LineCap.Round;pen.LineJoin=LineJoin.Round;
@@ -156,11 +205,23 @@ namespace OpenTrackpadUi {
       Glyphs.Draw(e.Graphics,new RectangleF(12,12,24,24),Kind,ink);e.Graphics.Restore(state);
     }
   }
+  // Shared vector artwork: the icon generator calls the same geometry as the sidebar.
+  public static class BrandArtwork {
+    public static void Draw(Graphics graphics,RectangleF bounds){
+      var state=graphics.Save();graphics.TranslateTransform(bounds.X,bounds.Y);graphics.ScaleTransform(bounds.Width/64f,bounds.Height/64f);graphics.SmoothingMode=SmoothingMode.AntiAlias;
+      using(var path=Palette.Round(new RectangleF(.5f,.5f,63,63),18))using(var brush=new LinearGradientBrush(new RectangleF(0,0,64,64),Color.FromArgb(95,205,177),Color.FromArgb(37,143,128),45f))graphics.FillPath(brush,path);
+      using(var path=Palette.Round(new RectangleF(1,1,62,62),17.5f))using(var edge=new Pen(Color.FromArgb(38,255,255,255),1))graphics.DrawPath(edge,path);
+      using(var pen=new Pen(Color.White,3.25f)){pen.StartCap=pen.EndCap=LineCap.Round;pen.LineJoin=LineJoin.Round;
+        using(var pad=Palette.Round(new RectangleF(15,17,34,30),5.5f))graphics.DrawPath(pen,pad);
+        for(int finger=0;finger<3;finger++)graphics.DrawLine(pen,24+finger*8,24,24+finger*8,32);
+        graphics.DrawLine(pen,24,40,40,40);
+      }
+      graphics.Restore(state);
+    }
+  }
   sealed class BrandMark:Control {
-    public BrandMark(){TabStop=false;Size=new Size(40,40);BackColor=Palette.Nav;}
-    protected override void OnPaint(PaintEventArgs e){e.Graphics.Clear(Palette.Nav);var state=e.Graphics.Save();e.Graphics.ScaleTransform(Width/48f,Height/48f);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
-      using(var path=Palette.Round(new RectangleF(0,0,48,48),14))using(var brush=new LinearGradientBrush(new Rectangle(0,0,48,48),Color.FromArgb(88,200,169),Color.FromArgb(40,146,130),45f))e.Graphics.FillPath(brush,path);
-      Glyphs.Draw(e.Graphics,new RectangleF(9,9,30,30),"trackpad",Color.White);e.Graphics.Restore(state);
+    public BrandMark(){TabStop=false;Size=new Size(40,40);BackColor=Palette.Nav;SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,true);}
+    protected override void OnPaint(PaintEventArgs e){e.Graphics.Clear(Palette.Nav);BrandArtwork.Draw(e.Graphics,ClientRectangle);
     }
   }
 }

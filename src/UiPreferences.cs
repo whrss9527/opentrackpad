@@ -89,15 +89,19 @@ namespace OpenTrackpadUi {
     public static void RefreshSystemTheme() { dark = ResolveDark(current.Theme); }
     public static void Save(AppearanceSettings value) {
       string path = AppPaths.StateFile("appearance.json");
-      JsonRead existing=AtomicJson.Read(path,delegate(object candidate){return candidate is Dictionary<string,object>;});
-      var data=existing.Value as Dictionary<string,object>;
-      var next=data==null?new Dictionary<string,object>(preserved):new Dictionary<string,object>(data);
-      next["version"]=1;next["theme"]=value.Theme;next["font"]=value.Font;
-      if(existing.Unreadable || existing.Recovered)AtomicJson.PreserveDamaged(path);
-      AtomicJson.Write(path,next);
-      preserved=next;
-      Preview(value);
-      LoadWarning="";
+      // Keep another window's extension fields when both save concurrently.
+      AtomicJson.WithLock(path,delegate {
+        JsonRead existing=AtomicJson.Read(path,delegate(object candidate){return candidate is Dictionary<string,object>;});
+        var data=existing.Value as Dictionary<string,object>;
+        var next=data==null?new Dictionary<string,object>(preserved):new Dictionary<string,object>(data);
+        next["version"]=1;next["theme"]=value.Theme;next["font"]=value.Font;
+        if(existing.Unreadable || existing.Recovered)AtomicJson.PreserveDamaged(path);
+        AtomicJson.Write(path,next);
+        preserved=next;
+        Preview(value);
+        LoadWarning="";
+        return true;
+      });
     }
   }
 }

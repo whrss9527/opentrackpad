@@ -6,11 +6,20 @@ using OpenTrackpadShared;
 namespace ThreeFingerDrag {
   static class Program {
     static Mutex mutex;
+    static AppController activeController;
+    static int handlingFailure;
 
     public static bool Background;
 
     [STAThread]
     static void Main(string[] args) {
+      try{Run(args);}
+      catch(Exception error){ReportFailure(error,true);Environment.ExitCode=1;}
+      finally {
+        if(mutex!=null){try{mutex.ReleaseMutex();}catch{}mutex.Dispose();mutex=null;}
+      }
+    }
+    static void Run(string[] args) {
       CliOptions options;
       if(!CliOptions.TryParse(args,out options)){Environment.Exit(2);return;}
       args=options.Arguments;
@@ -87,18 +96,35 @@ namespace ThreeFingerDrag {
       Application.EnableVisualStyles();
       Application.SetCompatibleTextRenderingDefault(false);
       Application.ThreadException += delegate(object sender, ThreadExceptionEventArgs e) {
-        MessageBox.Show(e.Exception.ToString(), "Open Trackpad");
+        ReportFailure(e.Exception,false);
       };
       AppDomain.CurrentDomain.UnhandledException += delegate(object sender, UnhandledExceptionEventArgs e) {
-        MessageBox.Show(Convert.ToString(e.ExceptionObject), "Open Trackpad");
+        ReportFailure(e.ExceptionObject as Exception ?? new Exception("Unexpected application failure"),true);
       };
 
       using (AppController controller = new AppController()) {
-        Application.Run(controller);
+        activeController=controller;
+        try{Application.Run(controller);}finally{activeController=null;}
       }
-
-      try { mutex.ReleaseMutex(); } catch { }
-      mutex.Dispose();
+    }
+    static void ReportFailure(Exception error,bool terminating) {
+      AppController controller=activeController;
+      try {
+        if(controller!=null)controller.PauseAfterFailure(error);
+        else using(var log=new Logger())log.Error(error.ToString());
+      }catch{}
+      if(Interlocked.CompareExchange(ref handlingFailure,1,0)!=0)return;
+      try {
+        bool canContinue=controller!=null && !terminating;
+        using(var dialog=new FailureDialog(canContinue)) {
+          DialogResult choice=dialog.ShowDialog();
+          if(canContinue){if(choice==DialogResult.Abort)controller.ExitApplication();else controller.ShowSettings();}
+        }
+      }catch {
+        // The fallback is deliberately fixed text too, including failures in
+        // font or window creation. Never expose an exception or framework UI.
+        try{MessageBox.Show("Open Trackpad 暂时无法完成操作。请关闭后重新打开应用。","Open Trackpad",MessageBoxButtons.OK,MessageBoxIcon.Information);}catch{}
+      }finally{Interlocked.Exchange(ref handlingFailure,0);}
     }
   }
 }

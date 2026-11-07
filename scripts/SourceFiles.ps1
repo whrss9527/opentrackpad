@@ -17,7 +17,7 @@ function Get-OpenTrackpadSourceFiles([string]$ProjectRoot) {
             $relative = $entry.FullName.Substring($root.Length + 1).Replace('\','/')
             if ($entry.Extension.ToLowerInvariant() -eq '.png' -and $relative -notmatch '^docs/screenshots/[^/]+\.png$') { throw ('Screenshots must be under docs/screenshots: ' + $relative) }
             if ($relative -match '(?i)(^|/)(state|logs|recovery|analysis|build|artifacts|node_modules)(/|$)') { throw ('Private/generated directory inside source tree: ' + $relative) }
-            if ($entry.Extension.ToLowerInvariant() -notin @('.cs','.ps1','.md','.json','.manifest','.ico','.yml','.yaml','.txt','.png')) { throw ('Unexpected source-package file: ' + $relative) }
+            if ($entry.Extension.ToLowerInvariant() -notin @('.cs','.ps1','.md','.json','.manifest','.ico','.svg','.yml','.yaml','.txt','.png')) { throw ('Unexpected source-package file: ' + $relative) }
             $files.Add($entry.FullName)
         }
     }

@@ -6,6 +6,7 @@ using OpenTrackpadShared;
 
 namespace ThreeFingerDrag {
   sealed class InputWindow : NativeWindow, IDisposable {
+    const int FailurePauseMessage=0x8005;
     readonly Logger logger;
     readonly DragController drag;
     readonly Action<string> statusSink;
@@ -19,9 +20,11 @@ namespace ThreeFingerDrag {
     bool disposed;
     bool listening;
     public bool Listening {get{return listening;}}
+    public string LastRegistrationError {get;private set;}
     public bool Enabled = true;
     public Action ShowSettingsRequested;
     public Action ShutdownRequested;
+    public Action FailurePauseRequested;
     public Action<int> HotkeyReceived;
     public Action<int> RuntimeEventReceived;
 
@@ -40,11 +43,12 @@ namespace ThreeFingerDrag {
       };
     }
 
-    public void Register() {
-      if(AppPaths.IsIsolated){statusSink("预览模式：不注册触摸板输入，不更改系统设置。");return;}
+    public bool Register() {
+      Enabled=false;
+      if(AppPaths.IsIsolated){LastRegistrationError=string.Empty;statusSink("预览模式：不注册触摸板输入，不更改系统设置。");return false;}
       drag.ForceRelease("before input registration");
-      if(!drag.CanShutdown){Enabled=false;staleTimer.Start();statusSink("正在释放上次拖移，稍后恢复监听。");return;}
-      if(listening)return;
+      if(!drag.CanShutdown){staleTimer.Start();LastRegistrationError="正在释放上次拖移，稍后恢复监听。";statusSink(LastRegistrationError);return false;}
+      if(listening){Enabled=true;LastRegistrationError=string.Empty;return true;}
       RAWINPUTDEVICE[] devices = new RAWINPUTDEVICE[1];
       devices[0].usUsagePage = 0x0D;
       devices[0].usUsage = 0x05;
@@ -52,17 +56,26 @@ namespace ThreeFingerDrag {
       devices[0].hwndTarget = Handle;
       if (!Native.RegisterRawInputDevices(devices, 1, (uint)Marshal.SizeOf(typeof(RAWINPUTDEVICE)))) {
         int error = Marshal.GetLastWin32Error();
-        statusSink("Raw Input registration failed: " + error);
-        logger.Error("RegisterRawInputDevices failed: " + error);
-        return;
+        return ReportRegistrationFailure(error);
       }
+      listening=true;Enabled=true;LastRegistrationError=string.Empty;
       statusSink("三指触点监听已启动。");
-      listening=true;
       logger.Info("Registered HID touchpad Raw Input");
+      return true;
     }
+    internal static string RegistrationFailureText(int error){return "触摸板监听未能启动（错误 "+error+"）。正在重试，也可关闭后重新启用。";}
+    internal bool ReportRegistrationFailure(int error) {
+      Enabled=false;listening=false;string detail=RegistrationFailureText(error);
+      bool changed=LastRegistrationError!=detail;LastRegistrationError=detail;
+      if(changed){logger.Error("RegisterRawInputDevices failed: "+error);statusSink(detail);}
+      return false;
+    }
+    public void PostFailurePause(){Enabled=false;Native.PostMessage(Handle,FailurePauseMessage,IntPtr.Zero,IntPtr.Zero);}
 
     protected override void WndProc(ref Message message) {
-      if(message.Msg==Native.WM_RUNTIME_EVENT) {
+      if(message.Msg==FailurePauseMessage) {
+        if(FailurePauseRequested!=null)FailurePauseRequested();
+      } else if(message.Msg==Native.WM_RUNTIME_EVENT) {
         if(RuntimeEventReceived!=null)RuntimeEventReceived(message.WParam.ToInt32());
       } else if(message.Msg==DesktopHotkeys.Message) {
         if(HotkeyReceived!=null)HotkeyReceived(message.WParam.ToInt32());

@@ -35,7 +35,7 @@ namespace ThreeFingerDrag {
       }
       if (writeFile && !SuppressDisk) WriteFile(line);
       Action<string> handler = LineAdded;
-      if (handler != null) handler(line);
+      if(handler!=null)foreach(Action<string> subscriber in handler.GetInvocationList())try{subscriber(line);}catch{ /* A closing diagnostics view must not break input cleanup. */ }
     }
 
     void WriteFile(string line) {

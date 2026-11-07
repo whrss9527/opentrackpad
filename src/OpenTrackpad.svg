@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Open Trackpad</title>
+  <defs><linearGradient id="mint" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse"><stop stop-color="#5fCdb1"/><stop offset="1" stop-color="#258f80"/></linearGradient></defs>
+  <rect x=".5" y=".5" width="63" height="63" rx="18" fill="url(#mint)"/>
+  <rect x="1" y="1" width="62" height="62" rx="17.5" fill="none" stroke="#fff" stroke-opacity=".149"/>
+  <g fill="none" stroke="#fff" stroke-width="3.25" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="15" y="17" width="34" height="30" rx="5.5"/>
+    <path d="M24 24v8 M32 24v8 M40 24v8 M24 40h16"/>
+  </g>
+</svg>

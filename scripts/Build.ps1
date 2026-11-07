@@ -17,7 +17,7 @@ if (-not $assemblyInfo.Contains('AssemblyFileVersion("' + $version.assemblyVersi
 if ($manifest.assembly.assemblyIdentity.version -ne $version.assemblyVersion) { throw 'Update the application manifest version to match version.json.' }
 $shared = @('AssemblyInfo.cs','UiKit.cs','AppPaths.cs','UiPreferences.cs') | ForEach-Object { Join-Path $source $_ }
 foreach ($file in $shared) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw ('Missing shared source: ' + $file) } }
-$common = @('/nologo','/utf8output','/target:winexe','/platform:x64','/optimize+','/codepage:65001',('/win32manifest:' + (Join-Path $source 'OpenTrackpad.manifest')),('/win32icon:' + (Join-Path $source 'ThreeFingerDrag.ico')),'/reference:System.dll','/reference:System.Core.dll','/reference:System.Management.dll','/reference:System.Drawing.dll','/reference:System.Windows.Forms.dll','/reference:System.Web.Extensions.dll','/reference:Accessibility.dll')
+$common = @('/nologo','/utf8output','/target:winexe','/platform:x64','/optimize+','/codepage:65001',('/win32manifest:' + (Join-Path $source 'OpenTrackpad.manifest')),('/win32icon:' + (Join-Path $source 'OpenTrackpad.ico')),'/reference:System.dll','/reference:System.Core.dll','/reference:System.Management.dll','/reference:System.Drawing.dll','/reference:System.Windows.Forms.dll','/reference:System.Web.Extensions.dll','/reference:Accessibility.dll')
 $app = Join-Path $OutputDirectory 'OpenTrackpad.exe'
 $engine = @(Get-ChildItem -LiteralPath (Join-Path $source 'ThreeFingerDrag') -Filter '*.cs' -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
 & $compiler @common /main:ThreeFingerDrag.Program (('/out:' + $app)) @shared @engine

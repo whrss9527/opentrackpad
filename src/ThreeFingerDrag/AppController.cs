@@ -30,6 +30,7 @@ namespace ThreeFingerDrag {
     readonly System.Windows.Forms.Timer runtimeTimer=new System.Windows.Forms.Timer();
     readonly RuntimeGate runtime=new RuntimeGate();
     readonly RuntimeRetry runtimeRetry=new RuntimeRetry();
+    readonly int uiThread=Thread.CurrentThread.ManagedThreadId;
     bool resumeCleanupPending;
     bool enabled = true;
     bool diagnostic;
@@ -64,9 +65,10 @@ namespace ThreeFingerDrag {
       input = new InputWindow(logger, drag, OnCoreStatus);
       bool locked,connected;runtime.Snapshot(Native.ReadSession(out locked,out connected),locked,connected);
       configurationReady=CanRun && GesturePreferences.IsSessionReady();
-      input.Enabled=CanRun && enabled && configurationReady && !AppPaths.IsIsolated;
+      input.Enabled=false;
       input.ShowSettingsRequested=ShowSettings;
       input.ShutdownRequested=ExitApplication;
+      input.FailurePauseRequested=ApplyFailurePause;
       desktopHotkeys=new DesktopHotkeys(input.Handle,logger,OnCoreStatus);
       input.HotkeyReceived=desktopHotkeys.Handle;
       input.RuntimeEventReceived=OnRuntimeEvent;
@@ -94,7 +96,7 @@ namespace ThreeFingerDrag {
       var pauseMenu=new ToolStripMenuItem();pauseMenu.Click+=delegate{SetEnabled(!enabled);};menu.Items.Add(pauseMenu);
       var desktopMenu=new ToolStripMenuItem("Ctrl＋左右键切换桌面");desktopMenu.Click+=delegate{SetDesktopHotkeys(!desktopHotkeysRequested);};menu.Items.Add(desktopMenu);
       menu.Items.Add("诊断与维护",null,delegate{ShowSettings();form.ShowDiagnostics();});
-      menu.Opening+=delegate{pauseMenu.Text=enabled?"暂停三指拖移":"启用三指拖移";desktopMenu.Checked=desktopHotkeys.Enabled;undoMenu.Enabled=speedCoordinator.CanUndo;undoMenu.Text=speedCoordinator.CanUndo?"撤销调速 · 回到 "+speedCoordinator.UndoTarget+" / 20":"撤销调速";};
+      menu.Opening+=delegate{pauseMenu.Text=enabled?"暂停三指拖移":"启用三指拖移";desktopMenu.Checked=desktopHotkeysRequested;undoMenu.Enabled=speedCoordinator.CanUndo;undoMenu.Text=speedCoordinator.CanUndo?"撤销调速 · 回到 "+speedCoordinator.UndoTarget+" / 20":"撤销调速";};
       menu.Items.Add("恢复 Windows 原生手势", null, delegate { RestoreNativeGestures(); });
       var administratorMenu=new ToolStripMenuItem("以管理员身份重启");administratorMenu.Enabled=!AppPaths.IsIsolated;administratorMenu.Click+=delegate {RestartAsAdministrator();};menu.Items.Add(administratorMenu);
       menu.Items.Add("退出", null, delegate { ExitApplication(); });
@@ -106,15 +108,13 @@ namespace ThreeFingerDrag {
       if(CanRun && enabled && configurationReady)input.Register();
       configurationTimer.Interval=2000;
       configurationTimer.Tick+=delegate {
-        if(exiting || !CanRun || !enabled || configurationReady)return;
-        if(!GesturePreferences.IsSessionReady())return;
-        configurationReady=true;
-        input.Register();
-        input.Enabled=!AppPaths.IsIsolated;
-        configurationTimer.Stop();
-        OnCoreStatus("三指拖移已启用；四指左右滑动切换应用窗口。");
+        if(exiting || !CanRun || !enabled){configurationTimer.Stop();return;}
+        if(!configurationReady)configurationReady=GesturePreferences.IsSessionReady();
+        if(!configurationReady)return;
+        bool active=ActivateInput();
+        if(active)OnCoreStatus("三指拖移已启用；四指左右滑动切换应用窗口。");
       };
-      configurationTimer.Enabled=CanRun && enabled && !configurationReady;
+      UpdateRegistrationRetry();
       speedTimer.Interval=2000;
       speedTimer.Tick+=delegate {
         try {
@@ -127,8 +127,8 @@ namespace ThreeFingerDrag {
       runtimeTimer.Interval=5000;runtimeTimer.Tick+=delegate{OnRuntimeEvent((int)RuntimeEvent.Refresh);};
       if(CanRun)speedTimer.Start();
       ScheduleRuntimeRetry();
-      if(!configurationReady)OnCoreStatus("等待系统应用手势设置：请在 Windows 触摸板设置中将三指轻扫和点击均设为“无”；生效后会自动启用。");
-      else OnCoreStatus(desktopHotkeysRequested && !desktopHotkeys.Enabled?desktopHotkeys.LastError:"三指拖移已启用；四指左右切换应用窗口。");
+      if(!configurationReady && enabled)OnCoreStatus("等待系统应用手势设置：请在 Windows 触摸板设置中将三指轻扫和点击均设为“无”；生效后会自动启用。");
+      else OnCoreStatus(!string.IsNullOrEmpty(input.LastRegistrationError)?input.LastRegistrationError:desktopHotkeysRequested && !desktopHotkeys.Enabled?desktopHotkeys.LastError:DragActive?"三指拖移已启用；四指左右切换应用窗口。":"三指拖移已暂停，保留你的原有选择。");
       if(runtime.Paused)OnCoreStatus("会话已暂停；解锁或恢复连接后继续。");
       if(AppPaths.IsIsolated)OnCoreStatus("预览模式：设置仅保存在独立目录，不控制触摸板或系统快捷键。");
       if(settingsWarning!=null)OnCoreStatus(settingsWarning);
@@ -137,7 +137,7 @@ namespace ThreeFingerDrag {
     }
 
     public bool EnabledValue { get { return enabled; } }
-    public bool DragActive {get{return input.Enabled && input.Listening;}}
+    public bool DragActive {get{return input!=null && input.Enabled && input.Listening;}}
     public bool NeedsConfiguration {get{return !configurationReady;}}
     public bool DiagnosticValue { get { return diagnostic; } }
     public int UnifiedSpeedValue { get { return unifiedSpeed; } }
@@ -146,6 +146,7 @@ namespace ThreeFingerDrag {
     public string DesktopHotkeyWarning {get{return desktopHotkeysRequested && (!desktopHotkeys.Enabled || !string.IsNullOrEmpty(desktopHotkeys.LastError))?(string.IsNullOrEmpty(desktopHotkeys.LastError)?"桌面快捷键未启用，请到诊断与维护查看。":desktopHotkeys.LastError):null;}}
     public string CurrentStatus { get { return currentStatus; } }
     public bool DesktopHotkeysEnabled {get{return desktopHotkeys.Enabled;}}
+    public string InputWarning {get{return enabled && CanRun && configurationReady && !DragActive && !AppPaths.IsIsolated?input.LastRegistrationError:null;}}
     public bool DesktopHotkeysRequested {get{return desktopHotkeysRequested;}}
     public bool IsPreview {get{return AppPaths.IsIsolated;}}
     public bool RuntimePaused {get{return runtime.Paused || resumeCleanupPending;}}
@@ -200,19 +201,29 @@ namespace ThreeFingerDrag {
     public void SetEnabled(bool value) {
       enabled = value;
       configurationReady=CanRun && GesturePreferences.IsSessionReady();
-      input.Enabled = CanRun && value && configurationReady && !AppPaths.IsIsolated;
-      if(CanRun && value && configurationReady)input.Register();else input.Suspend();
-      configurationTimer.Enabled=CanRun && value && !configurationReady;
+      ActivateInput();
+      if(CanRun)speedTimer.Start();
       if (!value) input.Cancel("paused");
       string text = value
         ? (configurationReady?"三指拖移已启用；四指左右滑动切换应用窗口。":"等待系统应用手势设置；三指轻扫和点击设为“无”后会自动启用。")
         : "三指拖移已暂停。可点击“恢复原生手势”恢复 Windows 三指操作。";
       if(AppPaths.IsIsolated)text="预览模式：已记录本次选择，不控制系统输入。";
       else if(runtime.Paused)text="设置已保留，恢复会话后按你的选择继续。";
+      else if(value && configurationReady && !DragActive && !string.IsNullOrEmpty(input.LastRegistrationError))text=input.LastRegistrationError;
       OnCoreStatus(text);
       logger.Info(text);
       if (form != null && !form.IsDisposed) form.SyncEnabled(value);
       SaveOptions();
+    }
+
+    bool ActivateInput() {
+      bool active=false;
+      if(CanRun && enabled && configurationReady)active=input.Register();else input.Suspend();
+      UpdateRegistrationRetry();return active;
+    }
+    void UpdateRegistrationRetry() {
+      configurationTimer.Interval=configurationReady?5000:2000;
+      configurationTimer.Enabled=CanRun && enabled && !AppPaths.IsIsolated && (!configurationReady || !DragActive);
     }
 
     void AdoptUnifiedSpeed(int value) {
@@ -258,32 +269,51 @@ namespace ThreeFingerDrag {
       logger.Info(value ? "Diagnostic logging enabled" : "Diagnostic logging disabled");
     }
 
-    public void OpenLogs() { logger.OpenDirectory(); }
+    public void OpenLogs() {OpenLogs(logger.OpenDirectory);}
+    internal void OpenLogs(Action open) {try{open();}catch(Exception error){logger.Error(error.ToString());OnCoreStatus("日志目录暂时无法打开，请稍后重试。仍可复制诊断信息。");}}
     public string CopyableLog() { return logger.Snapshot(); }
 
     void OnCoreStatus(string text) {
       currentStatus = text;
-      if(tray!=null){string tip="Open Trackpad · "+unifiedSpeed+"/20 · "+(input.Enabled?"三指拖移已启用":"三指拖移已暂停");if(tray.Text!=tip)tray.Text=tip;}
+      if(tray!=null){string tip="Open Trackpad · "+unifiedSpeed+"/20 · "+(DragActive?"三指拖移已启用":"三指拖移已暂停");if(tray.Text!=tip)tray.Text=tip;}
       if (form != null && !form.IsDisposed && form.Visible) form.UpdateStatus(text);
       try {
         if(text!=null && text.IndexOf("触点：",StringComparison.Ordinal)>=0 && (DateTime.UtcNow-lastStatusWrite).TotalSeconds<15)return;
         lastStatusWrite=DateTime.UtcNow;
         string path=AppPaths.StateFile("gesture-status.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path));
-        File.WriteAllText(path,new JavaScriptSerializer().Serialize(new {updatedAt=DateTime.Now.ToString("o"),enabled=input!=null && input.Enabled,requestedEnabled=enabled,requiresSignIn=!configurationReady,readiness=GesturePreferences.LastReadinessDetail,unifiedSpeed=unifiedSpeed,canUndoSpeed=speedCoordinator!=null && speedCoordinator.CanUndo,undoSpeedTarget=speedCoordinator!=null && speedCoordinator.CanUndo?(int?)speedCoordinator.UndoTarget:null,dragGain=drag==null?0:drag.Scale,physicalSpeedCalibration=true,status=text,dragStarts=drag==null?0:drag.DragStarts,dragReleases=drag==null?0:drag.DragReleases,desktopHotkeysEnabled=desktopHotkeys!=null && desktopHotkeys.Enabled,desktopHotkeyError=desktopHotkeys==null?null:desktopHotkeys.LastError,desktopSwitchRequests=desktopHotkeys==null?0:desktopHotkeys.Requests}));
+        File.WriteAllText(path,new JavaScriptSerializer().Serialize(new {updatedAt=DateTime.Now.ToString("o"),enabled=DragActive,requestedEnabled=enabled,requiresSignIn=!configurationReady,readiness=GesturePreferences.LastReadinessDetail,inputError=input==null?null:input.LastRegistrationError,unifiedSpeed=unifiedSpeed,canUndoSpeed=speedCoordinator!=null && speedCoordinator.CanUndo,undoSpeedTarget=speedCoordinator!=null && speedCoordinator.CanUndo?(int?)speedCoordinator.UndoTarget:null,dragGain=drag==null?0:drag.Scale,physicalSpeedCalibration=true,status=text,dragStarts=drag==null?0:drag.DragStarts,dragReleases=drag==null?0:drag.DragReleases,desktopHotkeysEnabled=desktopHotkeys!=null && desktopHotkeys.Enabled,desktopHotkeyError=desktopHotkeys==null?null:desktopHotkeys.LastError,desktopSwitchRequests=desktopHotkeys==null?0:desktopHotkeys.Requests}));
       }catch{}
     }
 
     public void ConfigureGestureMode() {
-      try { GesturePreferences.Apply(true);SetEnabled(true);OnCoreStatus(GesturePreferences.LastRecoveryWarning.Length>0?GesturePreferences.LastRecoveryWarning:GesturePreferences.LastReloadPending?"等待系统应用手势设置。":"已配置三指拖移与四指手势；桌面快捷键保留你的选择。"); }
+      try { GesturePreferences.Apply(true);SetEnabled(true);OnCoreStatus(!string.IsNullOrEmpty(InputWarning)?InputWarning:GesturePreferences.LastRecoveryWarning.Length>0?GesturePreferences.LastRecoveryWarning:GesturePreferences.LastReloadPending?"等待系统应用手势设置。":"已配置三指拖移与四指手势；桌面快捷键保留你的选择。"); }
       catch(Exception exception){logger.Error(exception.Message);OnCoreStatus("配置失败："+exception.Message);}
     }
 
-    public void RestoreNativeGestures() {
-      SetEnabled(false);
-      SetDesktopHotkeys(false);
-      try {GesturePreferences.Apply(false);OnCoreStatus(GesturePreferences.LastRecoveryWarning.Length>0?GesturePreferences.LastRecoveryWarning:GesturePreferences.LastReloadPending?"原生手势已保存，Windows 重新登录后生效；开机启动已关闭。":"已恢复安装前的 Windows 手势设置，并关闭开机启动。");}
-      catch(Exception exception){logger.Error(exception.Message);OnCoreStatus("恢复失败："+exception.Message);}
+    public void RestoreNativeGestures() {RestoreNativeGestures(delegate{GesturePreferences.Apply(false);});}
+    internal void RestoreNativeGestures(Action restore) {
+      bool originalEnabled=enabled,originalHotkeys=desktopHotkeysRequested;
+      // Pause only effective listeners. Persist the user's choices after the
+      // Windows restoration succeeds, never before a fallible preflight.
+      try {
+        input.Suspend();desktopHotkeys.SetEnabled(false);configurationTimer.Stop();
+        restore();enabled=false;desktopHotkeysRequested=false;
+        input.Suspend();desktopHotkeys.SetEnabled(false);SaveOptions();
+        if(form!=null && !form.IsDisposed){form.SyncEnabled(false);form.SyncDesktopHotkeys(false);}
+        OnCoreStatus(GesturePreferences.LastRecoveryWarning.Length>0?GesturePreferences.LastRecoveryWarning:GesturePreferences.LastReloadPending?"原生手势已保存，Windows 重新登录后生效；开机启动已关闭。":"已恢复安装前的 Windows 手势设置，并关闭开机启动。");
+      }catch(Exception exception) {
+        enabled=originalEnabled;desktopHotkeysRequested=originalHotkeys;
+        configurationReady=CanRun && GesturePreferences.IsSessionReady();ActivateInput();desktopHotkeys.SetEnabled(originalHotkeys && CanRun);
+        logger.Error(exception.ToString());
+        string reason=FriendlyRestoreReason(exception);
+        OnCoreStatus("恢复未完成，原来的手势与快捷键选择已保留。"+reason);
+      }
+    }
+    internal static string FriendlyRestoreReason(Exception error) {
+      string message=error.Message;
+      if(error is InvalidDataException && message.Length<=180)foreach(char value in message)if(value>='\u4e00' && value<='\u9fff')return message;
+      return "可在诊断与维护中查看原因，再重试或到 Windows 设置手动恢复。";
     }
 
     public void SetAutostart(bool value){try{GesturePreferences.SetAutostart(value);OnCoreStatus(AppPaths.IsIsolated?"预览模式：不会修改登录启动项。":value?"已启用登录启动。":"已关闭登录启动。");}catch(Exception error){logger.Error(error.Message);OnCoreStatus("登录启动设置未能保存，请稍后重试。");}}
@@ -346,12 +376,25 @@ namespace ThreeFingerDrag {
         OnCoreStatus(resumeCleanupPending?"正在释放上次输入，释放成功后恢复监听。":"会话已暂停；解锁或恢复连接后继续。");return;
       }
       configurationReady=GesturePreferences.IsSessionReady();
-      if(enabled && configurationReady)input.Register();else input.Suspend();
-      input.Enabled=enabled && configurationReady && !AppPaths.IsIsolated;
-      desktopHotkeys.SetEnabled(desktopHotkeysRequested);configurationTimer.Enabled=enabled && !configurationReady;
+      ActivateInput();
+      desktopHotkeys.SetEnabled(desktopHotkeysRequested);
       speedTimer.Start();runtimeTimer.Stop();
-      OnCoreStatus(AppPaths.IsIsolated?"预览模式：不会更改系统输入。":input.Enabled?"已恢复三指拖移；保留原来的速度与快捷键选择。":"已恢复会话；三指拖移保留你的暂停或待配置状态。");
+      OnCoreStatus(AppPaths.IsIsolated?"预览模式：不会更改系统输入。":enabled && !string.IsNullOrEmpty(input.LastRegistrationError)?input.LastRegistrationError:DragActive?"已恢复三指拖移；保留原来的速度与快捷键选择。":"已恢复会话；三指拖移保留你的暂停或待配置状态。");
     }
+    internal void PauseAfterFailure(Exception error) {
+      // Do not persist a temporary emergency pause over the user's preferences.
+      enabled=false;desktopHotkeysRequested=false;input.Enabled=false;
+      try{logger.Error(error.ToString());}catch{}
+      if(Thread.CurrentThread.ManagedThreadId==uiThread)ApplyFailurePause();else input.PostFailurePause();
+    }
+    void ApplyFailurePause() {
+      TryFailureCleanup(delegate{configurationTimer.Stop();speedTimer.Stop();runtimeTimer.Stop();});
+      TryFailureCleanup(delegate{input.Suspend();});
+      TryFailureCleanup(delegate{desktopHotkeys.SetEnabled(false);});
+      TryFailureCleanup(delegate{if(form!=null && !form.IsDisposed){form.SyncEnabled(false);form.SyncDesktopHotkeys(false);}});
+      TryFailureCleanup(delegate{OnCoreStatus("遇到异常，已暂停新的输入操作。你可以在设置中重新启用，或复制诊断信息。");});
+    }
+    void TryFailureCleanup(Action operation){try{operation();}catch(Exception error){try{logger.Error(error.ToString());}catch{}}}
     void ScheduleRuntimeRetry() {
       // Explicit lock/disconnect/suspend wait for the matching event. A stale
       // query after activation retries at 5,10,20,40,60 seconds, then once/minute.

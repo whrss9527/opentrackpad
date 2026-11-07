@@ -45,7 +45,7 @@ namespace ThreeFingerDrag {
       originalEntries.RemoveAt(originalEntries.Count-1);originalEntries.RemoveAt(0);rejected=false;
       try{GesturePreferences.DecodeOriginalValues(originalSnapshot);}catch(InvalidDataException){rejected=true;}
       check(rejected,"Incomplete original gesture snapshots rejected before any system write");
-      SnapshotChecks(check);CliChecks(check);
+      SnapshotChecks(check);CliChecks(check);FailureChecks(check);
       string parent=Path.GetDirectoryName(Path.GetFullPath(output));Directory.CreateDirectory(parent);
       string fixture=Path.GetFullPath(Path.Combine(parent,"runtime-fixture-"+Guid.NewGuid().ToString("N")));
       Directory.CreateDirectory(fixture);
@@ -83,6 +83,27 @@ namespace ThreeFingerDrag {
       return new Dictionary<string,object>{{"values",entries}};
     }
     static bool Invalid(Action action) {try{action();return false;}catch(InvalidDataException){return true;}}
+    static void FailureChecks(Action<bool,string> check) {
+      using(var logger=new Logger()) {
+        logger.SuppressDisk=true;int delivered=0;
+        logger.LineAdded+=delegate{throw new InvalidOperationException("fixture closing diagnostic view");};
+        logger.LineAdded+=delegate{delivered++;};
+        logger.Error("fixture error details");
+        check(delivered==1 && logger.Snapshot().Contains("fixture error details"),"A failed log subscriber cannot hide diagnostics or interrupt input cleanup");
+        for(int i=0;i<350;i++)logger.Info("bounded fixture "+i);
+        check(logger.Snapshot().Split(new[]{Environment.NewLine},StringSplitOptions.None).Length==300,"Exception diagnostics keep the existing bounded in-memory log");
+      }
+      string failure=InputWindow.RegistrationFailureText(5);
+      check(failure.Contains("未能启动") && failure.Contains("重试") && !failure.Contains("Raw Input"),"Listener failure is localized and explains how to retry");
+      string reason=AppController.FriendlyRestoreReason(new IOException("System.IO.IOException: fixture private path"));
+      check(!reason.Contains("System.IO") && !reason.Contains("private path"),"Raw framework restore errors stay out of user status");
+      reason=AppController.FriendlyRestoreReason(new InvalidDataException("旧版备份缺少原始轻点拖移状态，请到 Windows 设置手动恢复。"));
+      check(reason.Contains("轻点拖移") && reason.Contains("手动恢复"),"Actionable Chinese legacy-backup recovery instructions remain visible");
+      foreach(bool continuing in new[]{true,false}) {
+        string message=FailureDialog.MessageFor(continuing);
+        check(!string.IsNullOrWhiteSpace(message) && !message.Contains("Exception") && !message.Contains("System.") && !message.Contains(" at "),"Unexpected-error dialog uses fixed Chinese copy: "+(continuing?"paused":"startup"));
+      }
+    }
     static void SnapshotChecks(Action<bool,string> check) {
       var original=OriginalSnapshot();var decoded=GesturePreferences.DecodeOriginalValues(original);
       check(!GesturePreferences.OriginalTapAndDrag(original,decoded).HasValue,"Legacy registry values never invent the independent native tap-and-drag bit");

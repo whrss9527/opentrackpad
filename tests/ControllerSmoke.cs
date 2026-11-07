@@ -9,6 +9,7 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using OpenTrackpadShared;
 using ThreeFingerDrag;
+using OpenTrackpadUi;
 
 static class ControllerSmoke {
     static readonly List<string> checks=new List<string>();
@@ -21,6 +22,30 @@ static class ControllerSmoke {
     static object Field(object value,string name){return value.GetType().GetField(name,BindingFlags.NonPublic|BindingFlags.Instance).GetValue(value);}
     static SettingsForm CurrentForm {get{return (SettingsForm)Field(controller,"form");}}
     static Dictionary<string,object> Options(){return (Dictionary<string,object>)AtomicJson.Read(AppPaths.StateFile("gesture-options.json"),null).Value;}
+    static string Hash(string path){using(var hash=System.Security.Cryptography.SHA256.Create())return BitConverter.ToString(hash.ComputeHash(File.ReadAllBytes(path)));}
+    static Control Named(Control root,string name){foreach(Control child in root.Controls){if(child.Name==name)return child;Control nested=Named(child,name);if(nested!=null)return nested;}return null;}
+    static void AppearanceTests(){
+        string path=AppPaths.StateFile("appearance.json");
+        AtomicJson.Write(path,new Dictionary<string,object>{{"version",1},{"theme","light"},{"font","auto"},{"extension",42}});UiPreferences.Reload();
+        controller.ShowSettings();CurrentForm.ShowAppearancePage();Application.DoEvents();
+        var theme=(ChoiceButton)Named(CurrentForm,"themeChoice");var font=(ChoiceButton)Named(CurrentForm,"fontChoice");
+        theme.SelectedIndex=2;font.SelectedIndex=Math.Min(1,font.Options.Length-1);string selectedFont=UiPreferences.Fonts[font.SelectedIndex].Key;
+        ((ActionButton)Named(CurrentForm,"saveAppearance")).PerformClick();
+        var saved=(Dictionary<string,object>)AtomicJson.Read(path,null).Value;
+        Check(Convert.ToString(saved["theme"])=="dark" && Convert.ToString(saved["font"])==selectedFont && Convert.ToInt32(saved["extension"])==42,"The real settings Save action persists appearance and preserves unrelated fields");
+        controller.HideSettings();controller.ShowSettings();CurrentForm.ShowAppearancePage();Application.DoEvents();
+        theme=(ChoiceButton)Named(CurrentForm,"themeChoice");font=(ChoiceButton)Named(CurrentForm,"fontChoice");
+        Check(theme.SelectedIndex==2 && UiPreferences.Fonts[font.SelectedIndex].Key==selectedFont && !Named(CurrentForm,"saveAppearance").Enabled,"Reopening settings retains committed appearance without a pending save");
+        string savedHash=Hash(path);theme.SelectedIndex=1;font.SelectedIndex=0;controller.HideSettings();controller.ShowSettings();CurrentForm.ShowAppearancePage();Application.DoEvents();
+        theme=(ChoiceButton)Named(CurrentForm,"themeChoice");
+        Check(theme.SelectedIndex==2 && UiPreferences.Current.Font==selectedFont && Hash(path)==savedHash,"Closing an unsaved appearance preview restores the committed style without writing");
+        theme.SelectedIndex=1;
+        using(var locked=new FileStream(path,FileMode.Open,FileAccess.ReadWrite,FileShare.None))((ActionButton)Named(CurrentForm,"saveAppearance")).PerformClick();
+        Check(Hash(path)==savedHash && theme.SelectedIndex==2 && Named(CurrentForm,"appearanceStatus").Text.Contains("未能保存"),"A failed settings Save keeps the last committed appearance and shows an actionable error");
+        theme.SelectedIndex=1;typeof(SettingsForm).GetMethod("ProcessCmdKey",BindingFlags.NonPublic|BindingFlags.Instance).Invoke(CurrentForm,new object[]{new Message(),Keys.Control|Keys.S});
+        Check(Convert.ToString(((Dictionary<string,object>)AtomicJson.Read(path,null).Value)["theme"])=="light" && !Named(CurrentForm,"saveAppearance").Enabled,"Ctrl S commits an appearance preview through the real settings command route");
+        controller.HideSettings();
+    }
     static bool PumpUntil(Func<bool> condition,int timeout){var clock=Stopwatch.StartNew();while(clock.ElapsedMilliseconds<timeout){Application.DoEvents();if(condition())return true;Thread.Sleep(10);}return false;}
     static Process StartChild(string data,string arguments){
         var info=new ProcessStartInfo(production,arguments){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Path.GetDirectoryName(production)};
@@ -46,7 +71,11 @@ static class ControllerSmoke {
         Check(!controller.DesktopHotkeysEnabled && !input.Listening,"Requested shortcuts remain unregistered in isolation");
         controller.SetDesktopHotkeys(false);controller.SetAutostart(false);controller.ConfigureGestureMode();
         Check(controller.EnabledValue && !controller.DesktopHotkeysRequested && !GesturePreferences.HasAutostart(),"Applying simulated gestures preserves shortcut and startup choices");
-        controller.SetAutostart(true);controller.SetDesktopHotkeys(true);controller.RestoreNativeGestures();
+        controller.SetAutostart(true);controller.SetDesktopHotkeys(true);
+        string beforeRestore=Hash(AppPaths.StateFile("gesture-options.json"));
+        controller.RestoreNativeGestures(delegate{throw new IOException("Simulated unavailable native settings");});
+        Check(controller.EnabledValue && controller.DesktopHotkeysRequested && GesturePreferences.HasAutostart() && Hash(AppPaths.StateFile("gesture-options.json"))==beforeRestore,"A failed native-gesture restoration preserves requested features, startup and saved options");
+        controller.RestoreNativeGestures();
         Check(!controller.EnabledValue && !controller.DesktopHotkeysRequested && !GesturePreferences.HasAutostart(),"Simulated native-gesture restoration closes startup and custom gestures");
         controller.SetEnabled(true);Check(controller.EnabledValue && !controller.DragActive && !input.Listening,"Enabling the isolated controller cannot bypass the input gate");
         MethodInfo restart=typeof(AppController).GetMethod("RestartAsAdministrator",BindingFlags.NonPublic|BindingFlags.Instance);
@@ -68,6 +97,13 @@ static class ControllerSmoke {
             Check(CurrentForm==null || !CurrentForm.Visible,"A different profile never signals this controller's show event");
             StopOther(sibling);Check(sibling.ExitCode==0,"The independent profile exits through its own stop signal");
         }
+        AppearanceTests();
+        input.ReportRegistrationFailure(5);
+        var status=(Dictionary<string,object>)AtomicJson.Read(AppPaths.StateFile("gesture-status.json"),null).Value;
+        Check(!input.Listening && !controller.DragActive && !(bool)status["enabled"] && Convert.ToString(status["inputError"]).Contains("监听未能启动"),"An input-registration failure publishes a paused status and an actionable reason");
+        controller.SetEnabled(true);Check(!input.Listening && !controller.DragActive,"Retrying after a registration failure cannot bypass the isolated input gate");
+        const string sensitiveDetail="fake-internal-diagnostic-token";controller.OpenLogs(delegate{throw new IOException(sensitiveDetail);});
+        Check(!controller.CurrentStatus.Contains(sensitiveDetail) && controller.CurrentStatus.Contains("日志目录") && controller.CopyableLog().Contains(sensitiveDetail),"Opening an unavailable log directory shows a short hint and retains technical details only in diagnostics");
         string concurrent=AppPaths.StateFile("concurrent-state.json");
         var writers=new List<Process>();
         foreach(string token in new[]{"writer-a","writer-b"}){
@@ -80,6 +116,9 @@ static class ControllerSmoke {
         Check(AtomicJson.WithLock<bool>(concurrent,delegate{return File.ReadAllText(concurrent)==File.ReadAllText(AtomicJson.RecoveryPath(concurrent));}),"Two real writer processes leave the main and recovery files consistent");
         Check(Convert.ToInt32(((Dictionary<string,object>)AtomicJson.Read(concurrent,null).Value)["iteration"])==19,"Concurrent writers retain a complete final JSON payload");
         Check(!input.Listening && !controller.DesktopHotkeysEnabled,"No controller integration action enables real input or global shortcuts");
+        controller.SetEnabled(true);controller.SetDesktopHotkeys(true);string beforeFailure=Hash(AppPaths.StateFile("gesture-options.json"));
+        controller.PauseAfterFailure(new InvalidOperationException("simulated UI failure"));
+        Check(!controller.EnabledValue && !controller.DesktopHotkeysRequested && !controller.DragActive && Hash(AppPaths.StateFile("gesture-options.json"))==beforeFailure,"An unexpected-error pause disables current input without overwriting saved user preferences");
     }
     [STAThread] static int Main(string[] args){
         if(args.Length==4 && args[0]=="--write-fake"){
